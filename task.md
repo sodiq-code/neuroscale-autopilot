@@ -1,30 +1,27 @@
-# NeuroScale Autopilot — Build Task Tracker
+# NeuroScale Autopilot — Build Tracker
 
-## Progress
-- [x] GitHub repo created: https://github.com/sodiq-code/neuroscale-autopilot
-- [x] Project structure created
-- [x] LICENSE (MIT)
-- [x] .gitignore, .env.example, requirements.txt, pyproject.toml
-- [x] Detector Agent — full implementation
-- [x] Analyzer Agent — Qwen-Max RCA
-- [x] Planner Agent — RAG + human-in-loop
-- [x] Executor Agent — kubectl/ArgoCD/Kyverno + circuit breaker
+## Status: PUSHED ✅
 
-## In Progress
-- [ ] Escalation Agent (Slack + approval workflow)
-- [ ] MCP Server (Qwen MCP tools)
-- [ ] Orchestrator (pipeline glue)
-- [ ] FastAPI main app + WebSocket events
-- [ ] Runbooks JSON files
-- [ ] K8s scenarios YAML (inject faults)
-- [ ] Alibaba Cloud ECS proof file
-- [ ] React Dashboard
-- [ ] README
-- [ ] Architecture diagram
+## Completed
+- [x] escalation.py syntax bug fixed (orphaned finally block)
+- [x] README.md — full hackathon-grade documentation
+- [x] Dockerfile — prod-ready, non-root, kubectl included
+- [x] docker-compose.yml — autopilot + dashboard services
+- [x] .github/workflows/ci.yml — lint, test, docker build
+- [x] .env.example — full variable reference
+- [x] tests/conftest.py — mock env setup
+- [x] tests/test_pipeline.py — 17/17 passing
+- [x] requirements.txt — version pins relaxed (was conflicting)
+- [x] Initial git commit + push → github.com/sodiq-code/neuroscale-autopilot
+- [x] GitHub About section: MIT license, description, topics
 
-## Decisions
-- Track 4: Autopilot Agent
-- Qwen-Max for Analyzer+Executor, Qwen-Embedding for Planner RAG, Qwen-Turbo for Escalation
-- MCP server is mandatory for Innovation criterion
-- Circuit breaker on Executor prevents loops
-- Demo mode fallback when kubectl not installed
+## Pending
+- [ ] Smoke test with real Qwen key (waiting for key re-entry)
+- [ ] Dashboard build: cd dashboard && npm install && npm run build
+- [ ] (Optional) Record demo video
+
+## Repo
+https://github.com/sodiq-code/neuroscale-autopilot
+
+## Test Results
+17/17 passed — 2026-06-07
