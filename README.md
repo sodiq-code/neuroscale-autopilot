@@ -40,6 +40,13 @@ Metrics → Detect → Analyze (Qwen-Max) → Plan (Qwen-Embedding RAG) → Exec
 
 ## Architecture
 
+![NeuroScale Autopilot Architecture](docs/assets/architecture-diagram.png)
+
+> Full pipeline: Kubernetes/Kyverno/OpenCost events → 5 autonomous agents → MCP Server → Alibaba Cloud ECS. Orchestrator handles alert deduplication and human-approval timeout (300s).
+
+<details>
+<summary>ASCII fallback</summary>
+
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                    NeuroScale Autopilot                      │
@@ -61,6 +68,7 @@ Metrics → Detect → Analyze (Qwen-Max) → Plan (Qwen-Embedding RAG) → Exec
 │  └─────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────┘
 ```
+</details>
 
 ---
 
