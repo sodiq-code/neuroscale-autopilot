@@ -120,7 +120,7 @@ docker-compose up --build
 
 Services:
 - `http://localhost:8000` — MCP Server API + Health
-- `http://localhost:3000` — React Dashboard (if built)
+- `http://localhost:3000` — React Monitoring Dashboard
 
 ---
 
