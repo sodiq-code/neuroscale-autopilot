@@ -10,6 +10,14 @@ An autonomous Kubernetes operations agent powered by the **Qwen model family**. 
 
 ---
 
+## Demo Video
+
+[![NeuroScale Autopilot Demo](https://img.youtube.com/vi/ARVD_QFKXGw/maxresdefault.jpg)](https://youtu.be/ARVD_QFKXGw)
+
+> Click to watch the 2:44 demo — full pipeline walkthrough, Qwen models in action, MCP server, and 17/17 tests.
+
+---
+
 ## What It Does
 
 NeuroScale Autopilot runs a continuous self-healing loop on your Kubernetes cluster:
@@ -218,6 +226,6 @@ MIT — see [LICENSE](LICENSE)
 ## Author
 
 **Sodiq Jimoh** — DevOps / Cloud Engineer  
-[GitHub](https://github.com/sodiq-code) · [LinkedIn](https://linkedin.com/in/sodiq-jimoh-afsod)
+[LinkedIn](https://linkedin.com/in/sodiq-jimoh-afsod)
 
 Built for the **Qwen Cloud Global AI Hackathon — Track 4: Autopilot Agent**
