@@ -1,0 +1,36 @@
+# Demo Scenario 3: Kyverno Policy Violation
+# This deployment violates the disallow-root-containers policy
+# Apply to trigger a policy violation alert
+# Usage: kubectl apply -f inject-policy-violation.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: privileged-demo
+  namespace: default
+  labels:
+    app: privileged-demo
+    scenario: policy-violation-demo
+    managed-by: neuroscale-autopilot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: privileged-demo
+  template:
+    metadata:
+      labels:
+        app: privileged-demo
+    spec:
+      containers:
+      - name: privileged-container
+        image: nginx:1.25
+        securityContext:
+          privileged: true        # Violates disallow-root-containers policy
+          runAsUser: 0            # Running as root
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"

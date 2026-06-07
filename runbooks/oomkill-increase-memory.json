@@ -1,0 +1,21 @@
+{
+  "name": "oomkill-increase-memory-limits",
+  "description": "OOMKilled pod: increase container memory limits and requests to prevent recurrence",
+  "version": "1.0.0",
+  "triggers": ["OOMKill", "OOMKilled", "memory limit exceeded", "exit code 137", "memory pressure"],
+  "steps": [
+    "Identify the affected deployment via: kubectl get pod <name> -n <namespace> -o yaml",
+    "Get current memory limits: kubectl get deployment <name> -n <namespace> -o jsonpath='{.spec.template.spec.containers[*].resources}'",
+    "Calculate new limits: double current limit, cap at 80% of node allocatable memory",
+    "Patch deployment resources via MCP tool: patch_deployment_resources",
+    "Wait for rollout: kubectl rollout status deployment/<name> -n <namespace> --timeout=60s",
+    "Verify pod is Running: kubectl get pods -n <namespace> -l app=<name>",
+    "Monitor for 5 minutes: watch kubectl top pods -n <namespace>",
+    "Update GitOps repo with new resource values for permanence"
+  ],
+  "parameters": ["namespace", "deployment_name", "container_name", "new_memory_limit", "new_memory_request"],
+  "risk": "low",
+  "rollback": "kubectl rollout undo deployment/<deployment_name> -n <namespace>",
+  "estimated_duration": "45 seconds",
+  "tags": ["memory", "oomkill", "resources", "pod-health"]
+}

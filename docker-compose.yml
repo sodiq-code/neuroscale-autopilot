@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+  autopilot:
+    build: .
+    container_name: neuroscale-autopilot
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - QWEN_BASE_URL=${QWEN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - QWEN_MODEL_MAX=${QWEN_MODEL_MAX:-qwen-max}
+      - QWEN_MODEL_TURBO=${QWEN_MODEL_TURBO:-qwen-turbo}
+      - QWEN_MODEL_EMBEDDING=${QWEN_MODEL_EMBEDDING:-text-embedding-v3}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+      - DRY_RUN=${DRY_RUN:-true}
+      - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-30}
+      - ALIBABA_ACCESS_KEY_ID=${ALIBABA_ACCESS_KEY_ID:-}
+      - ALIBABA_ACCESS_KEY_SECRET=${ALIBABA_ACCESS_KEY_SECRET:-}
+      - ALIBABA_REGION_ID=${ALIBABA_REGION_ID:-cn-hangzhou}
+    volumes:
+      - ${KUBECONFIG:-~/.kube/config}:/home/autopilot/.kube/config:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  dashboard:
+    image: nginx:alpine
+    container_name: neuroscale-dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    volumes:
+      - ./dashboard/dist:/usr/share/nginx/html:ro
+    depends_on:
+      - autopilot
+    profiles:
+      - dashboard
+
+networks:
+  default:
+    name: neuroscale-net

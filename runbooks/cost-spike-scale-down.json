@@ -1,0 +1,21 @@
+{
+  "name": "cost-spike-scale-down",
+  "description": "OpenCost budget spike: identify and scale down idle or over-provisioned workloads",
+  "version": "1.0.0",
+  "triggers": ["cost spike", "budget exceeded", "overspend", "idle KServe", "cost alert", "namespace over budget"],
+  "steps": [
+    "Query OpenCost for top consumers: GET /model/allocation?window=1d&aggregate=pod&namespace=<ns>",
+    "Identify idle pods (CPU < 5% for > 30min) or over-replicated deployments",
+    "Check if KServe InferenceService has idle replicas: kubectl get isvc -n <namespace>",
+    "Scale down idle KServe model: kubectl patch isvc <name> --patch '{\"spec\":{\"predictor\":{\"maxReplicas\":1}}}'",
+    "Scale down over-replicated deployments: kubectl scale deployment <name> --replicas=<target>",
+    "Set namespace resource quota if missing: kubectl apply -f namespace-quota.yaml",
+    "Monitor spend reduction in OpenCost after 10 minutes",
+    "Update HPA (HorizontalPodAutoscaler) min replicas to prevent future over-scaling"
+  ],
+  "parameters": ["namespace", "workload_name", "target_replicas", "cost_threshold_usd"],
+  "risk": "medium",
+  "rollback": "kubectl scale deployment <name> --replicas=<original_count>",
+  "estimated_duration": "30 seconds",
+  "tags": ["cost", "opencost", "scaling", "kserve", "budget"]
+}

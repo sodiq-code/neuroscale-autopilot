@@ -1,0 +1,21 @@
+{
+  "name": "crashloop-rollback-deployment",
+  "description": "CrashLoopBackOff: rollback deployment to last stable version via ArgoCD",
+  "version": "1.0.0",
+  "triggers": ["CrashLoopBackOff", "crash loop", "repeated crashes", "BackOff", "container crash"],
+  "steps": [
+    "Check deployment rollout history: kubectl rollout history deployment/<name> -n <namespace>",
+    "Identify last stable revision (look for annotations)",
+    "Trigger rollback via ArgoCD: argocd app rollback <app-name> --insecure",
+    "If ArgoCD unavailable, use kubectl: kubectl rollout undo deployment/<name> -n <namespace>",
+    "Monitor rollback status: kubectl rollout status deployment/<name> -n <namespace>",
+    "Confirm pods are healthy: kubectl get pods -n <namespace>",
+    "Check logs for stability: kubectl logs -l app=<name> --tail=50 -n <namespace>",
+    "Create GitHub issue to track root cause of crashing version"
+  ],
+  "parameters": ["namespace", "deployment_name", "argocd_app_name"],
+  "risk": "medium",
+  "rollback": "Re-apply previous deployment manifest from Git history",
+  "estimated_duration": "90 seconds",
+  "tags": ["crashloop", "rollback", "argocd", "gitops"]
+}

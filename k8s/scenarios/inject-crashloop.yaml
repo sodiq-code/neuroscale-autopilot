@@ -1,0 +1,33 @@
+# Demo Scenario 2: CrashLoopBackOff injection
+# Apply to simulate a crashing pod for the demo
+# Usage: kubectl apply -f inject-crashloop.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crashloop-demo
+  namespace: default
+  labels:
+    app: crashloop-demo
+    scenario: crashloop-demo
+    managed-by: neuroscale-autopilot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: crashloop-demo
+  template:
+    metadata:
+      labels:
+        app: crashloop-demo
+    spec:
+      containers:
+      - name: crasher
+        image: busybox
+        command: ["sh", "-c", "echo 'Starting...'; sleep 2; echo 'Crashing!'; exit 1"]
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "50m"
+          limits:
+            memory: "64Mi"
+            cpu: "100m"

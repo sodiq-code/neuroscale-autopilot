@@ -1,0 +1,20 @@
+{
+  "name": "kyverno-policy-exception",
+  "description": "Kyverno policy violation: create scoped PolicyException for approved workload",
+  "version": "1.0.0",
+  "triggers": ["policy violation", "Kyverno", "disallow-root", "privileged container", "policy blocked", "admission webhook denied"],
+  "steps": [
+    "Review the violated Kyverno policy: kubectl get clusterpolicy <policy-name> -o yaml",
+    "Validate the workload has been approved for exception by security team",
+    "Create PolicyException resource scoped to specific namespace and workload",
+    "Commit exception YAML to infrastructure/kyverno/exceptions/ in GitOps repo",
+    "ArgoCD auto-syncs the exception — verify: kubectl get policyexception -n <namespace>",
+    "Confirm deployment now passes admission: kubectl apply -f <workload.yaml> --dry-run=server",
+    "Document exception reason in exception annotation for audit trail"
+  ],
+  "parameters": ["namespace", "policy_name", "workload_name", "exception_reason", "approved_by"],
+  "risk": "medium",
+  "rollback": "kubectl delete policyexception <workload-name>-exception -n <namespace>",
+  "estimated_duration": "2 minutes",
+  "tags": ["kyverno", "policy", "security", "exception", "gitops"]
+}

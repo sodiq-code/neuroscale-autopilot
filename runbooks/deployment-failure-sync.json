@@ -1,0 +1,20 @@
+{
+  "name": "deployment-failure-force-sync",
+  "description": "Deployment failure or OutOfSync: force ArgoCD hard refresh and sync",
+  "version": "1.0.0",
+  "triggers": ["deployment failed", "FailedCreate", "sync failed", "OutOfSync", "ArgoCD degraded", "resource creation failed"],
+  "steps": [
+    "Check ArgoCD app status: argocd app get <app-name> --insecure",
+    "Review sync error details in ArgoCD UI or: argocd app get <app-name> -o json | jq .status.conditions",
+    "Force hard refresh to pick up latest Git state: argocd app get --hard-refresh <app-name>",
+    "Trigger force sync: argocd app sync <app-name> --force --insecure",
+    "Monitor sync status: argocd app wait <app-name> --sync --insecure",
+    "Verify all resources are healthy: argocd app get <app-name> | grep Health",
+    "If sync fails, check for CRD issues or RBAC: kubectl describe events -n <namespace>"
+  ],
+  "parameters": ["argocd_app_name", "namespace"],
+  "risk": "low",
+  "rollback": "argocd app rollback <app-name> --insecure",
+  "estimated_duration": "60 seconds",
+  "tags": ["argocd", "deployment", "sync", "gitops", "recovery"]
+}
