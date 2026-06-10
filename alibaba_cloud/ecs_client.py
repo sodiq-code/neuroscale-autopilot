@@ -1,7 +1,6 @@
 """
-Alibaba Cloud ECS Integration — REQUIRED for hackathon submission.
+Alibaba Cloud ECS Integration.
 Demonstrates use of Alibaba Cloud services and APIs.
-This file is the "proof of Alibaba Cloud deployment" required by the judges.
 
 Functionality:
 - Deploy NeuroScale Autopilot backend to ECS instance
