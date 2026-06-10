@@ -248,7 +248,7 @@ MIT — see [LICENSE](LICENSE)
 
 ## Author
 
-**Sodiq Jimoh** — DevOps / Cloud Engineer  
+**Sodiq Jimoh** — Platform Engineer  
 [LinkedIn](https://linkedin.com/in/sodiq-jimoh-afsod)
 
 Built for the **Qwen Cloud Global AI Hackathon — Track 4: Autopilot Agent**
