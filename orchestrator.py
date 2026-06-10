@@ -104,7 +104,13 @@ class Orchestrator:
             result = await self.executor.execute(plan, rca)
             incident["execution"] = result.model_dump()
 
-            if result.success:
+            if result.blast_radius_blocked:
+                # Blast radius check caught a dangerous parameter — escalate to human
+                incident["status"] = "escalated_blast_radius"
+                logger.warning("blast_radius_escalation",
+                               alert_id=alert.id,
+                               reason=result.error)
+            elif result.success:
                 incident["status"] = "resolved"
                 logger.info("incident_resolved",
                             alert_id=alert.id,

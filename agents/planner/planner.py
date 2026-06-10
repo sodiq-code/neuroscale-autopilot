@@ -2,6 +2,10 @@
 Planner Agent — Selects the exact remediation runbook using RAG over runbook library.
 Uses Qwen embeddings to find the best matching runbook for the RCA.
 Implements human-in-the-loop checkpoint for high-risk actions.
+
+Safety improvements:
+- RAG margin gate: low-margin top-1 retrieval triggers escalation independent of Analyzer confidence
+- Per-action confidence thresholds: different action types require different confidence levels
 """
 
 import os
@@ -16,6 +20,21 @@ from agents.analyzer.analyzer import RCA
 
 logger = structlog.get_logger(__name__)
 
+# --- Per-action-type confidence thresholds ---
+# Higher blast radius = higher required confidence before auto-executing
+ACTION_CONFIDENCE_THRESHOLDS: dict[str, float] = {
+    "patch_resources": 0.75,   # low risk — memory/cpu patch
+    "monitor": 0.50,            # no-op, always safe
+    "create_exception": 0.80,   # policy change, needs higher bar
+    "scale_down": 0.85,         # can disrupt traffic if wrong
+    "rollback": 0.85,           # rewrites deployment state
+    "escalate": 0.0,            # always escalate regardless
+}
+
+# RAG retrieval safety thresholds
+RAG_MIN_SIMILARITY = 0.65       # absolute floor — below this, don't trust any runbook
+RAG_MIN_MARGIN = 0.08           # top-1 must beat top-2 by this margin — too close = ambiguous
+
 
 class RemediationPlan(BaseModel):
     rca_alert_id: str
@@ -26,12 +45,15 @@ class RemediationPlan(BaseModel):
     parameters: dict
     rollback_plan: str
     estimated_duration: str
+    retrieval_score: float = 0.0        # top-1 cosine similarity score
+    retrieval_margin: float = 0.0       # gap between top-1 and top-2
+    retrieval_escalated: bool = False   # True if escalated due to low RAG confidence
 
 
 class PlannerAgent:
     """
     Retrieves the best runbook for a given RCA using Qwen embeddings + cosine similarity.
-    Enforces human-in-the-loop for critical actions.
+    Enforces human-in-the-loop for critical actions and low-confidence retrievals.
     """
 
     def __init__(self):
@@ -59,7 +81,6 @@ class PlannerAgent:
             logger.warning("runbook_load_error", error=str(e))
 
         if not runbooks:
-            # Built-in fallback runbooks
             runbooks = self._default_runbooks()
 
         logger.info("runbooks_loaded", count=len(runbooks))
@@ -160,13 +181,16 @@ class PlannerAgent:
         logger.info("planning_remediation", alert_id=rca.alert_id, action_type=rca.action_type)
 
         # Find best matching runbook via embedding similarity
-        runbook = await self._find_best_runbook(rca)
+        runbook, retrieval_score, retrieval_margin = await self._find_best_runbook(rca)
+
+        # Check if RAG retrieval itself is shaky — independent of Analyzer confidence
+        retrieval_escalated = self._is_retrieval_uncertain(retrieval_score, retrieval_margin)
 
         # Determine if human approval is needed
-        requires_approval = self._requires_human_approval(rca, runbook)
+        requires_approval = self._requires_human_approval(rca, runbook, retrieval_escalated)
         approval_reason = None
         if requires_approval:
-            approval_reason = self._approval_reason(rca, runbook)
+            approval_reason = self._approval_reason(rca, runbook, retrieval_escalated)
 
         plan = RemediationPlan(
             rca_alert_id=rca.alert_id,
@@ -177,41 +201,69 @@ class PlannerAgent:
             parameters=self._extract_parameters(rca, runbook),
             rollback_plan=runbook.get("rollback", "Manual rollback required"),
             estimated_duration=runbook.get("estimated_duration", "Unknown"),
+            retrieval_score=round(retrieval_score, 4),
+            retrieval_margin=round(retrieval_margin, 4),
+            retrieval_escalated=retrieval_escalated,
         )
 
         logger.info("plan_created",
                     runbook=plan.runbook_name,
                     requires_approval=plan.requires_approval,
+                    retrieval_score=plan.retrieval_score,
+                    retrieval_margin=plan.retrieval_margin,
+                    retrieval_escalated=plan.retrieval_escalated,
                     duration=plan.estimated_duration)
         return plan
 
-    async def _find_best_runbook(self, rca: RCA) -> dict:
-        """Use Qwen embeddings to find the most semantically similar runbook."""
+    async def _find_best_runbook(self, rca: RCA) -> tuple[dict, float, float]:
+        """
+        Use Qwen embeddings to find the most semantically similar runbook.
+        Returns (best_runbook, top1_score, margin_between_top1_and_top2).
+        """
         query = f"{rca.root_cause} {rca.recommended_action} {rca.action_type}"
 
         try:
             query_emb = await self._embed(query)
-            best_score = -1
-            best_runbook = self.runbooks[0]
+            scores: list[tuple[float, dict]] = []
 
             for rb in self.runbooks:
                 rb_text = f"{rb['name']} {rb['description']} {' '.join(rb['triggers'])}"
                 rb_emb = await self._embed(rb_text)
                 score = self._cosine_similarity(query_emb, rb_emb)
+                scores.append((score, rb))
 
-                if score > best_score:
-                    best_score = score
-                    best_runbook = rb
+            # Sort descending by score
+            scores.sort(key=lambda x: x[0], reverse=True)
+
+            best_score, best_runbook = scores[0]
+            second_score = scores[1][0] if len(scores) > 1 else 0.0
+            margin = best_score - second_score
 
             logger.info("runbook_selected",
                         name=best_runbook["name"],
-                        similarity_score=round(best_score, 4))
-            return best_runbook
+                        similarity_score=round(best_score, 4),
+                        margin=round(margin, 4),
+                        second_best=scores[1][1]["name"] if len(scores) > 1 else "none")
+            return best_runbook, best_score, margin
 
         except Exception as e:
             logger.error("embedding_error_fallback", error=str(e))
-            # Fallback: keyword match
-            return self._keyword_match(rca)
+            fallback = self._keyword_match(rca)
+            return fallback, 0.0, 0.0
+
+    def _is_retrieval_uncertain(self, score: float, margin: float) -> bool:
+        """
+        Returns True if the RAG retrieval is too uncertain to trust — even if
+        Analyzer confidence is high. Low score OR thin margin both trigger escalation.
+        A confidently-retrieved-but-wrong runbook is worse than no runbook.
+        """
+        if score < RAG_MIN_SIMILARITY:
+            logger.warning("rag_low_similarity", score=score, threshold=RAG_MIN_SIMILARITY)
+            return True
+        if margin < RAG_MIN_MARGIN:
+            logger.warning("rag_low_margin", margin=margin, threshold=RAG_MIN_MARGIN)
+            return True
+        return False
 
     async def _embed(self, text: str) -> list[float]:
         """Get Qwen embedding for text with caching."""
@@ -239,31 +291,55 @@ class PlannerAgent:
                     return rb
         return self.runbooks[0]
 
-    def _requires_human_approval(self, rca: RCA, runbook: dict) -> bool:
-        """Determine if action needs human approval before executing."""
+    def _requires_human_approval(self, rca: RCA, runbook: dict, retrieval_escalated: bool) -> bool:
+        """
+        Determine if action needs human approval before executing.
+        Three independent gates — any one can force escalation:
+          1. Risk level from Analyzer
+          2. Per-action confidence threshold not met
+          3. RAG retrieval is uncertain (low score or thin margin)
+        """
+        # Gate 1: Analyzer risk level
         if rca.risk_level in ("critical", "high"):
             return True
-        if rca.confidence == "low":
+
+        # Gate 2: Per-action confidence threshold
+        confidence_map = {"high": 1.0, "medium": 0.6, "low": 0.3}
+        confidence_value = confidence_map.get(rca.confidence, 0.0)
+        required_threshold = ACTION_CONFIDENCE_THRESHOLDS.get(rca.action_type, 0.80)
+        if confidence_value < required_threshold:
             return True
+
+        # Gate 3: RAG retrieval uncertainty — independent of Analyzer
+        if retrieval_escalated:
+            return True
+
+        # Gate 4: Analyzer explicitly flagged it
         if not rca.auto_remediate:
             return True
+
         if runbook.get("risk") == "high":
             return True
+
         return False
 
-    def _approval_reason(self, rca: RCA, runbook: dict) -> str:
+    def _approval_reason(self, rca: RCA, runbook: dict, retrieval_escalated: bool) -> str:
         reasons = []
         if rca.risk_level in ("critical", "high"):
             reasons.append(f"Risk level is {rca.risk_level}")
         if rca.confidence == "low":
-            reasons.append("Qwen confidence is low")
+            reasons.append("Analyzer confidence is low")
+        if retrieval_escalated:
+            reasons.append(
+                "Runbook retrieval confidence is low — top match is ambiguous. "
+                "A wrong runbook executed confidently is worse than no runbook."
+            )
         if not rca.auto_remediate:
-            reasons.append("Qwen recommends human review")
+            reasons.append("Analyzer recommends human review")
         return ". ".join(reasons) + ". Please approve or reject this remediation."
 
     def _extract_parameters(self, rca: RCA, runbook: dict) -> dict:
         """Extract parameters needed for the runbook from the alert context."""
-        # These would be populated from the alert raw_data in production
         return {
             "alert_id": rca.alert_id,
             "action_type": rca.action_type,
