@@ -2,7 +2,7 @@
 
 > **Track 4 — Autopilot Agent** | Qwen Cloud Global AI Hackathon
 
-An autonomous Kubernetes operations agent powered by the **Qwen model family**. NeuroScale Autopilot detects incidents, diagnoses root causes, plans remediations, executes fixes, and escalates to humans — all without manual intervention.
+A self-healing control plane for autonomous Kubernetes infrastructure, powered by the **Qwen model family**. NeuroScale Autopilot continuously monitors your cluster, detects incidents, diagnoses root causes with Qwen-Max, plans remediations via RAG runbooks, executes fixes with circuit-breaker protection, and escalates to humans — autonomously closing the ops loop without manual intervention.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
