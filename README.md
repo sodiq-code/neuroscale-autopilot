@@ -79,7 +79,7 @@ Metrics → Detect → Analyze (Qwen-Max) → Plan (Qwen-Embedding RAG) → Exec
 **Monitoring Overview — Stat Cards + Agent Pipeline**
 ![Dashboard Overview](docs/screenshots/dashboard-top.png)
 
-**Active Incident Log — 4 Incident Types**
+**Active Incident Log — 2 Incident Types**
 ![Incident Log](docs/screenshots/dashboard-incidents.png)
 
 **Expanded Incident — Qwen Analysis + Remediation Plan + Human Approval**
