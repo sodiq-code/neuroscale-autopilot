@@ -1,0 +1,279 @@
+# NeuroScale Autopilot v2 Helm Chart Values
+# Deploy to Alibaba Cloud ACK or any Kubernetes cluster
+
+# ─── Global Configuration ──────────────────────────────────────────────────────
+global:
+  environment: production
+  logLevel: info
+
+# ─── NeuroScale Agent Deployment ───────────────────────────────────────────────
+neuroscale:
+  replicaCount: 2
+  
+  image:
+    repository: neuroscale-autopilot
+    tag: v2.0.0
+    pullPolicy: IfNotPresent
+  
+  # Resource limits and requests
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  
+  # Pod security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 8000
+    targetPort: 8000
+  
+  # Ingress configuration
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    hosts:
+      - host: neuroscale.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: neuroscale-tls
+        hosts:
+          - neuroscale.example.com
+
+# ─── Qwen API Configuration ────────────────────────────────────────────────────
+qwen:
+  apiKey: ""  # Set via --set qwen.apiKey=YOUR_KEY or secrets
+  baseUrl: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+  modelMax: qwen3-max
+  modelPlus: qwen-plus
+  modelTurbo: qwen-turbo
+  modelEmbedding: text-embedding-v3
+
+# ─── Kubernetes Configuration ──────────────────────────────────────────────────
+kubernetes:
+  dryRun: false  # Set to true for testing
+  pollIntervalSeconds: 30
+  kubeconfig: /etc/kubeconfig/config
+
+# ─── Trust Layer Configuration ─────────────────────────────────────────────────
+trustLayer:
+  enabled: true
+  executeThreshold: 90
+  dryrunThreshold: 70
+  escalationTimeoutSeconds: 300
+
+# ─── Chaos Injection Configuration ─────────────────────────────────────────────
+chaos:
+  enabled: true
+  cleanupTimeoutSeconds: 60
+
+# ─── Slack Integration ─────────────────────────────────────────────────────────
+slack:
+  enabled: false
+  webhookUrl: ""  # Set via --set slack.webhookUrl=YOUR_URL or secrets
+
+# ─── Alibaba Cloud Configuration ───────────────────────────────────────────────
+alibabaCloud:
+  enabled: false
+  accessKeyId: ""  # Set via secrets
+  accessKeySecret: ""  # Set via secrets
+  regionId: cn-hangzhou
+
+# ─── Prometheus Monitoring ────────────────────────────────────────────────────
+prometheus:
+  enabled: true
+  scrapeInterval: 30s
+  evaluationInterval: 30s
+  
+  # Prometheus server configuration
+  server:
+    enabled: true
+    image: prom/prometheus:latest
+    retention: 30d
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+  
+  # Alert manager
+  alertmanager:
+    enabled: true
+    image: prom/alertmanager:latest
+
+# ─── OpenCost Integration (Cost Tracking) ──────────────────────────────────────
+opencost:
+  enabled: true
+  image: ghcr.io/opencost/opencost:latest
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ─── Grafana Dashboard ─────────────────────────────────────────────────────────
+grafana:
+  enabled: true
+  image: grafana/grafana:latest
+  adminPassword: admin  # Change in production!
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ─── PostgreSQL (for outcomes logging) ─────────────────────────────────────────
+postgresql:
+  enabled: false  # Set to true if using PostgreSQL for outcomes storage
+  host: postgres.default.svc.cluster.local
+  port: 5432
+  database: neuroscale
+  username: neuroscale
+  # password: (set via secrets)
+
+# ─── Storage Configuration ────────────────────────────────────────────────────
+storage:
+  # PersistentVolume for outcomes and logs
+  enabled: true
+  size: 10Gi
+  storageClass: alibabacloud-ssd  # Use 'standard' for generic K8s
+  
+  # Backup configuration
+  backup:
+    enabled: true
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    retention: 30  # days
+
+# ─── RBAC Configuration ────────────────────────────────────────────────────────
+rbac:
+  create: true
+  serviceAccountName: neuroscale
+  
+  # ClusterRole permissions
+  clusterRole:
+    - apiGroups: [""]
+      resources: ["pods", "nodes", "namespaces", "events"]
+      verbs: ["get", "list", "watch"]
+    - apiGroups: ["apps"]
+      resources: ["deployments", "statefulsets", "daemonsets"]
+      verbs: ["get", "list", "watch", "patch", "update"]
+    - apiGroups: ["batch"]
+      resources: ["jobs", "cronjobs"]
+      verbs: ["get", "list", "watch"]
+    - apiGroups: [""]
+      resources: ["configmaps", "secrets"]
+      verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+# ─── Network Policy ────────────────────────────────────────────────────────────
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443  # HTTPS for Qwen API
+        - protocol: TCP
+          port: 6379  # Redis
+        - protocol: TCP
+          port: 5432  # PostgreSQL
+
+# ─── Pod Disruption Budget ────────────────────────────────────────────────────
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# ─── Horizontal Pod Autoscaler ────────────────────────────────────────────────
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# ─── Node Affinity ────────────────────────────────────────────────────────────
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - neuroscale
+          topologyKey: kubernetes.io/hostname
+
+# ─── Tolerations (for node taints) ────────────────────────────────────────────
+tolerations: []
+
+# ─── Node Selector ────────────────────────────────────────────────────────────
+nodeSelector:
+  workload-type: automation
+
+# ─── Lifecycle Hooks ──────────────────────────────────────────────────────────
+lifecycle:
+  preStop:
+    exec:
+      command: ["/bin/sh", "-c", "sleep 15"]
+
+# ─── Health Checks ────────────────────────────────────────────────────────────
+healthChecks:
+  liveness:
+    enabled: true
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  
+  readiness:
+    enabled: true
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# ─── Logging Configuration ────────────────────────────────────────────────────
+logging:
+  level: info
+  format: json
+  
+  # Fluentd integration (optional)
+  fluentd:
+    enabled: false
+    image: fluent/fluentd:latest
+
+# ─── Feature Flags ────────────────────────────────────────────────────────────
+features:
+  trustLayer: true
+  chaosInjection: true
+  costGovernance: true
+  mcpExpansion: true
+  qwen3MaxThinking: true

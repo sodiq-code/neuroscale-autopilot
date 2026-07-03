@@ -1,0 +1,85 @@
+# NeuroScale v2 Trust Layer — Policies Configuration
+# This file defines the thresholds and weights for the trust scoring algorithm.
+
+# ─── Execution Thresholds ──────────────────────────────────────────────────────
+# These thresholds determine the execution mode based on the final trust score.
+
+thresholds:
+  execute_live: 90
+    # Score >= 90: Execute remediation immediately without dry-run
+    # Used for high-confidence, low-risk actions
+  
+  dryrun_and_verify: 70
+    # Score in range [70, 90): Perform dry-run first, then execute if successful
+    # Used for moderate-confidence actions
+  
+  human_escalation: 0
+    # Score < 70: Escalate to human for approval
+    # Used for low-confidence or high-risk actions
+
+# ─── Sub-Score Weights ─────────────────────────────────────────────────────────
+# These weights determine how much each sub-score contributes to the final score.
+# All weights must sum to 1.0
+
+weights:
+  reversibility: 0.30
+    # How easily can the action be undone?
+    # Weight: 30% (most important)
+  
+  blast_radius: 0.25
+    # How many resources could be affected?
+    # Weight: 25%
+  
+  runbook_confidence: 0.25
+    # How confident is the remediation plan?
+    # Weight: 25%
+  
+  history: 0.20
+    # What is the historical success rate?
+    # Weight: 20% (least important)
+
+# ─── Escalation Configuration ──────────────────────────────────────────────────
+escalation:
+  timeout_seconds: 300
+    # How long to wait for human approval before auto-rejecting
+  
+  auto_reject_on_timeout: true
+    # Whether to automatically reject escalated actions on timeout
+  
+  slack_notification: true
+    # Whether to send Slack notifications for escalations
+
+# ─── Action Type Overrides ────────────────────────────────────────────────────
+# These override the default thresholds for specific action types.
+
+action_overrides:
+  delete_pod:
+    execute_threshold: 85
+    dryrun_threshold: 65
+    # Delete actions are riskier, require higher scores
+  
+  delete_resource:
+    execute_threshold: 95
+    dryrun_threshold: 80
+    # Deletion is very risky, require very high scores
+  
+  scale_down:
+    execute_threshold: 80
+    dryrun_threshold: 60
+    # Scale-down is relatively safe, lower threshold
+  
+  rollback_deployment:
+    execute_threshold: 75
+    dryrun_threshold: 55
+    # Rollback is safe and reversible, lower threshold
+
+# ─── Audit & Logging ──────────────────────────────────────────────────────────
+logging:
+  outcomes_file: outcomes.jsonl
+    # File where trust score outcomes are logged for audit trail
+  
+  log_level: info
+    # Logging level for trust layer events
+  
+  log_sub_scores: true
+    # Whether to log individual sub-scores in detail
