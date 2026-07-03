@@ -13,11 +13,13 @@ import os
 import asyncio
 import subprocess
 import structlog
+import json
 from datetime import datetime, timezone
 from pydantic import BaseModel
 from typing import Optional
 from agents.analyzer.analyzer import RCA
 from agents.planner.planner import RemediationPlan
+from agents.trust.score import TrustScoreEngine
 
 logger = structlog.get_logger(__name__)
 
@@ -67,21 +69,68 @@ class ExecutorAgent:
     """
     Executes K8s remediation actions safely with circuit breaker protection
     and blast radius parameter validation.
+    
+    CRITICAL: No action runs without a trust score.
+    All outcomes are logged to outcomes.jsonl for audit trail.
     """
 
-    def __init__(self):
+    def __init__(self, outcomes_file: str = "outcomes.jsonl"):
         self.circuit_breaker = CircuitBreaker()
         self.argocd_server = os.getenv("ARGOCD_SERVER", "localhost:8080")
+        self.trust_engine = TrustScoreEngine()
+        self.outcomes_file = outcomes_file
 
     async def execute(self, plan: RemediationPlan, rca: RCA) -> ExecutionResult:
-        """Execute the remediation plan."""
+        """Execute the remediation plan with mandatory trust scoring."""
         start = datetime.now(timezone.utc)
         key = f"{plan.runbook_name}-{plan.rca_alert_id.split('-')[0]}"
+
+        # STEP 1: MANDATORY TRUST SCORE COMPUTATION
+        # No action runs without a trust score.
+        logger.info("trust_score_computation_start", plan_id=plan.rca_alert_id)
+        try:
+            trust_result = await self.trust_engine.compute_trust_score(
+                action=rca.action_type,
+                context={"cluster_state": "live"},
+                target_resource={"type": "deployment", "name": plan.runbook_name},
+                remediation_plan=plan.parameters,
+            )
+            logger.info("trust_score_computed", plan_id=plan.rca_alert_id, score=trust_result["final_score"])
+        except Exception as e:
+            logger.error("trust_score_computation_failed", plan_id=plan.rca_alert_id, error=str(e))
+            return ExecutionResult(
+                plan_alert_id=plan.rca_alert_id,
+                success=False,
+                action_taken="blocked",
+                output="",
+                error=f"Trust score computation failed: {str(e)}. Action blocked.",
+                duration_seconds=0,
+                timestamp=start.isoformat(),
+            )
+
+        execution_mode = trust_result["execution_mode"]
+        trust_score = trust_result["final_score"]
+        logger.info("execution_mode_determined", plan_id=plan.rca_alert_id, mode=execution_mode, score=trust_score)
+
+        # STEP 2: Check if trust score permits execution
+        if execution_mode == "escalate_human":
+            logger.warning("escalate_human_trust_score", plan_id=plan.rca_alert_id, score=trust_score)
+            outcome = ExecutionResult(
+                plan_alert_id=plan.rca_alert_id,
+                success=False,
+                action_taken="blocked",
+                output="",
+                error=f"Trust score {trust_score} below escalation threshold. Requires human approval.",
+                duration_seconds=0,
+                timestamp=start.isoformat(),
+            )
+            await self._log_outcome(plan.rca_alert_id, rca.action_type, execution_mode, trust_score, outcome)
+            return outcome
 
         # Circuit breaker check
         if self.circuit_breaker.is_open(key):
             logger.warning("circuit_breaker_open", key=key)
-            return ExecutionResult(
+            outcome = ExecutionResult(
                 plan_alert_id=plan.rca_alert_id,
                 success=False,
                 action_taken="blocked",
@@ -90,6 +139,8 @@ class ExecutorAgent:
                 duration_seconds=0,
                 timestamp=start.isoformat(),
             )
+            await self._log_outcome(plan.rca_alert_id, rca.action_type, execution_mode, trust_score, outcome)
+            return outcome
 
         # Blast radius parameter check — runs before any execution
         blast_radius_violation = self._check_blast_radius(plan, rca)
@@ -127,7 +178,7 @@ class ExecutorAgent:
                              runbook=plan.runbook_name,
                              error=result.get("error"))
 
-            return ExecutionResult(
+            execution_result = ExecutionResult(
                 plan_alert_id=plan.rca_alert_id,
                 success=result["success"],
                 action_taken=plan.runbook_name,
@@ -136,12 +187,17 @@ class ExecutorAgent:
                 duration_seconds=duration,
                 timestamp=start.isoformat(),
             )
+            
+            # STEP 3: Log outcome to outcomes.jsonl
+            await self._log_outcome(plan.rca_alert_id, rca.action_type, execution_mode, trust_score, execution_result)
+            
+            return execution_result
 
         except Exception as e:
             self.circuit_breaker.record_failure(key)
             duration = (datetime.now(timezone.utc) - start).total_seconds()
             logger.error("executor_exception", error=str(e))
-            return ExecutionResult(
+            execution_result = ExecutionResult(
                 plan_alert_id=plan.rca_alert_id,
                 success=False,
                 action_taken=plan.runbook_name,
@@ -150,6 +206,14 @@ class ExecutorAgent:
                 duration_seconds=duration,
                 timestamp=start.isoformat(),
             )
+            
+            # Log failed outcome
+            try:
+                await self._log_outcome(plan.rca_alert_id, rca.action_type, "error", 0.0, execution_result)
+            except Exception as log_error:
+                logger.error("outcome_logging_failed", error=str(log_error))
+            
+            return execution_result
 
     def _check_blast_radius(self, plan: RemediationPlan, rca: RCA) -> Optional[str]:
         """
@@ -369,3 +433,27 @@ spec:
             return f"[DEMO] Would execute: {' '.join(cmd)}", "", True
         except Exception as e:
             return "", str(e), False
+
+    async def _log_outcome(self, plan_id: str, action_type: str, execution_mode: str, trust_score: float, result: ExecutionResult) -> None:
+        """Log outcome to outcomes.jsonl for audit trail."""
+        logger.info("logging_outcome", plan_id=plan_id)
+        
+        outcome_record = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "plan_id": plan_id,
+            "action_type": action_type,
+            "execution_mode": execution_mode,
+            "trust_score": trust_score,
+            "success": result.success,
+            "action_taken": result.action_taken,
+            "duration_seconds": result.duration_seconds,
+            "error": result.error,
+        }
+        
+        try:
+            with open(self.outcomes_file, "a") as f:
+                f.write(json.dumps(outcome_record) + "\n")
+            logger.info("outcome_logged", plan_id=plan_id, file=self.outcomes_file)
+        except Exception as e:
+            logger.error("outcome_logging_failed", plan_id=plan_id, error=str(e))
+            raise

@@ -1,0 +1,19 @@
+apiVersion: v2
+name: neuroscale
+description: NeuroScale Autopilot v2 - Autonomous SRE with Verifiable Trust Layer
+type: application
+version: 2.0.0
+appVersion: "2.0.0"
+keywords:
+  - kubernetes
+  - sre
+  - automation
+  - ai
+  - qwen
+  - trust-layer
+home: https://github.com/sodiq-code/neuroscale-autopilot
+sources:
+  - https://github.com/sodiq-code/neuroscale-autopilot
+maintainers:
+  - name: NeuroScale Team
+    email: team@neuroscale.dev

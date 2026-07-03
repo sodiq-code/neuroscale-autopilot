@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "neuroscale.fullname" . }}-config
+  labels:
+    {{- include "neuroscale.labels" . | nindent 4 }}
+data:
+  trust-policies.yaml: |
+    weights:
+      reversibility: {{ .Values.trustLayer.weights.reversibility }}
+      blast_radius: {{ .Values.trustLayer.weights.blastRadius }}
+      runbook_confidence: {{ .Values.trustLayer.weights.runbookConfidence }}
+      history: {{ .Values.trustLayer.weights.history }}
+    thresholds:
+      execute: {{ .Values.trustLayer.thresholds.execute }}
+      dryrun_verify: {{ .Values.trustLayer.thresholds.dryrunVerify }}
+      escalate_human: {{ .Values.trustLayer.thresholds.escalateHuman }}
+  models.yaml: |
+    critical_rca:
+      model: {{ .Values.qwen.criticalModel }}
+      thinking_enabled: {{ .Values.qwen.thinkingEnabled }}
+      max_tokens: {{ .Values.qwen.maxTokens }}
+    standard_analysis:
+      model: {{ .Values.qwen.standardModel }}
+      max_tokens: 2000
+    simple_summary:
+      model: {{ .Values.qwen.simpleModel }}
+      max_tokens: 1000
+    embedding:
+      model: {{ .Values.qwen.embeddingModel }}

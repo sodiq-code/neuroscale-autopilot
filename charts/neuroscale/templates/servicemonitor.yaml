@@ -1,0 +1,16 @@
+{{- if .Values.monitoring.prometheus.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "neuroscale.fullname" . }}
+  labels:
+    {{- include "neuroscale.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "neuroscale.selectorLabels" . | nindent 6 }}
+  endpoints:
+  - port: http
+    interval: {{ .Values.monitoring.prometheus.interval }}
+    path: /metrics
+{{- end }}

@@ -1,0 +1,243 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "neuroscale.fullname" . }}-analyzer
+  labels:
+    {{- include "neuroscale.labels" . | nindent 4 }}
+    component: analyzer
+spec:
+  replicas: {{ .Values.replicaCount.analyzer }}
+  selector:
+    matchLabels:
+      {{- include "neuroscale.selectorLabels" . | nindent 6 }}
+      component: analyzer
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "neuroscale.selectorLabels" . | nindent 8 }}
+        component: analyzer
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "neuroscale.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: analyzer
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 12 }}
+        image: "{{ .Values.image.repository }}/analyzer:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - name: http
+          containerPort: 8000
+          protocol: TCP
+        env:
+        - name: QWEN_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: qwen-credentials
+              key: api-key
+        - name: DASHSCOPE_BASE_URL
+          value: {{ .Values.qwen.baseUrl }}
+        - name: NEUROSCALE_MODEL
+          value: {{ .Values.qwen.criticalModel }}
+        - name: ENABLE_THINKING
+          value: "{{ .Values.qwen.thinkingEnabled }}"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          {{- toYaml .Values.resources.analyzer | nindent 12 }}
+        volumeMounts:
+        - name: nas
+          mountPath: {{ .Values.storage.mountPath }}
+      volumes:
+      - name: nas
+        persistentVolumeClaim:
+          claimName: {{ include "neuroscale.fullname" . }}-pvc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "neuroscale.fullname" . }}-executor
+  labels:
+    {{- include "neuroscale.labels" . | nindent 4 }}
+    component: executor
+spec:
+  replicas: {{ .Values.replicaCount.executor }}
+  selector:
+    matchLabels:
+      {{- include "neuroscale.selectorLabels" . | nindent 6 }}
+      component: executor
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "neuroscale.selectorLabels" . | nindent 8 }}
+        component: executor
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "neuroscale.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: executor
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 12 }}
+        image: "{{ .Values.image.repository }}/executor:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        env:
+        - name: OUTCOMES_FILE
+          value: {{ .Values.logging.outcomesFile }}
+        resources:
+          {{- toYaml .Values.resources.executor | nindent 12 }}
+        volumeMounts:
+        - name: nas
+          mountPath: {{ .Values.storage.mountPath }}
+      volumes:
+      - name: nas
+        persistentVolumeClaim:
+          claimName: {{ include "neuroscale.fullname" . }}-pvc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "neuroscale.fullname" . }}-mcp
+  labels:
+    {{- include "neuroscale.labels" . | nindent 4 }}
+    component: mcp
+spec:
+  replicas: {{ .Values.replicaCount.mcp }}
+  selector:
+    matchLabels:
+      {{- include "neuroscale.selectorLabels" . | nindent 6 }}
+      component: mcp
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "neuroscale.selectorLabels" . | nindent 8 }}
+        component: mcp
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "neuroscale.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: mcp
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 12 }}
+        image: "{{ .Values.image.repository }}/mcp:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - name: http
+          containerPort: 8001
+          protocol: TCP
+        env:
+        - name: QWEN_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: qwen-credentials
+              key: api-key
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          {{- toYaml .Values.resources.mcp | nindent 12 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "neuroscale.fullname" . }}-dashboard
+  labels:
+    {{- include "neuroscale.labels" . | nindent 4 }}
+    component: dashboard
+spec:
+  replicas: {{ .Values.replicaCount.dashboard }}
+  selector:
+    matchLabels:
+      {{- include "neuroscale.selectorLabels" . | nindent 6 }}
+      component: dashboard
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "neuroscale.selectorLabels" . | nindent 8 }}
+        component: dashboard
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "neuroscale.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: dashboard
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 12 }}
+        image: "{{ .Values.image.repository }}/dashboard:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - name: http
+          containerPort: 3000
+          protocol: TCP
+        env:
+        - name: API_URL
+          value: "http://{{ include \"neuroscale.fullname\" . }}-api:8000"
+        - name: MCP_URL
+          value: "http://{{ include \"neuroscale.fullname\" . }}-mcp:8001"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          {{- toYaml .Values.resources.dashboard | nindent 12 }}
