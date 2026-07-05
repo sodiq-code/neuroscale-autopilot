@@ -1,170 +1,51 @@
-# Default values for neuroscale.
-# This is a YAML-formatted file.
-
-replicaCount:
-  analyzer: 2
-  planner: 1
-  executor: 3
-  mcp: 2
-  dashboard: 1
+replicaCount: 1
 
 image:
-  repository: neuroscale
-  tag: "2.0.0"
+  repository: ghcr.io/sodiq-code/neuroscale-autopilot
+  tag: v2.0.0
   pullPolicy: IfNotPresent
 
-imagePullSecrets: []
-nameOverride: ""
-fullnameOverride: ""
-
-serviceAccount:
-  create: true
-  annotations: {}
-  name: ""
-
-podAnnotations:
-  prometheus.io/scrape: "true"
-  prometheus.io/port: "8000"
-  prometheus.io/path: "/metrics"
-
-podSecurityContext:
-  runAsNonRoot: true
-  runAsUser: 1000
-  fsGroup: 1000
-
-securityContext:
-  allowPrivilegeEscalation: false
-  capabilities:
-    drop:
-      - ALL
-  readOnlyRootFilesystem: true
-
 service:
-  api:
-    type: ClusterIP
-    port: 8000
-    targetPort: 8000
-  mcp:
-    type: ClusterIP
-    port: 8001
-    targetPort: 8001
-  dashboard:
-    type: LoadBalancer
-    port: 3000
-    targetPort: 3000
+  type: ClusterIP
+  port: 8000
 
-ingress:
-  enabled: false
-  className: "aliyun-slb"
-  annotations: {}
-  hosts:
-    - host: neuroscale.example.com
-      paths:
-        - path: /
-          pathType: Prefix
-  tls: []
-
-resources:
-  analyzer:
-    limits:
-      cpu: 1000m
-      memory: 1Gi
-    requests:
-      cpu: 500m
-      memory: 512Mi
-  executor:
-    limits:
-      cpu: 500m
-      memory: 512Mi
-    requests:
-      cpu: 250m
-      memory: 256Mi
-  mcp:
-    limits:
-      cpu: 500m
-      memory: 512Mi
-    requests:
-      cpu: 250m
-      memory: 256Mi
-  dashboard:
-    limits:
-      cpu: 500m
-      memory: 512Mi
-    requests:
-      cpu: 250m
-      memory: 256Mi
-
-autoscaling:
+dashboard:
   enabled: true
-  minReplicas: 2
-  maxReplicas: 10
-  targetCPUUtilizationPercentage: 80
-  targetMemoryUtilizationPercentage: 80
-
-nodeSelector: {}
-
-tolerations: []
-
-affinity: {}
-
-storage:
-  enabled: true
-  className: "alibabacloud-nas"
-  size: 50Gi
-  mountPath: /mnt/nas
+  port: 3000
+  ingress:
+    enabled: false
+    className: nginx
+    host: neuroscale.local
 
 qwen:
-  apiKey: ""
-  baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-  criticalModel: "qwen3-max"
-  standardModel: "qwen-plus"
-  simpleModel: "qwen-turbo"
-  embeddingModel: "text-embedding-v3"
-  thinkingEnabled: true
-  maxTokens: 4000
+  baseUrl: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+  apiKeySecretName: neuroscale-qwen
+  apiKeySecretKey: api-key
+  modelMax: qwen3-max
+  modelPlus: qwen-plus
+  modelTurbo: qwen-turbo
+  embeddingModel: text-embedding-v3
 
-alibaba:
-  region: "ap-southeast-1"
-  accessKey: ""
-  secretKey: ""
-
-trustLayer:
-  weights:
-    reversibility: 0.30
-    blastRadius: 0.25
-    runbookConfidence: 0.25
-    history: 0.20
-  thresholds:
-    execute: 90
-    dryrunVerify: 70
-    escalateHuman: 0
-
-monitoring:
-  enabled: true
-  prometheus:
-    enabled: true
-    interval: 30s
-  grafana:
-    enabled: true
-    dashboards: true
-
-logging:
-  level: INFO
-  format: json
-  outcomesFile: /mnt/nas/outcomes.jsonl
+trust:
+  executeThreshold: 90
+  dryrunThreshold: 70
 
 chaos:
   enabled: true
-  scenarios:
-    - oomkilled
-    - bad_configmap
-    - node_notready
-    - imagepullbackoff
-    - crashloopbackoff
-    - hpa_thrash
-    - persistent_volume_detach
-    - network_policy_misconfig
-    - dns_failure
-    - cert_expiry
-    - ingress_misroute
-    - cost_anomaly
+  namespace: neuroscale-chaos
+
+safety:
+  dryRun: true
+  humanApprovalTimeoutSeconds: 300
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+rbac:
+  create: true
+  serviceAccountName: neuroscale
