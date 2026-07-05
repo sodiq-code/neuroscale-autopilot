@@ -1,221 +1,205 @@
 """
-NeuroScale v2 Trust Score Engine
-
-Implements the composite trust scoring algorithm that gates all remediation
-actions. The trust score is a weighted combination of four sub-scores:
-
-- Reversibility (0.30): Can the action be undone?
-- Blast Radius (0.25): How many resources could be affected?
-- Runbook Confidence (0.25): How confident is the remediation plan?
-- History (0.20): What is the historical success rate for this action type?
-
-Final decision:
-- score >= 90: EXECUTE (immediate)
-- 70 <= score < 90: DRYRUN_VERIFY (dry-run first)
-- score < 70: ESCALATE_HUMAN (wait for approval)
+TrustScore — Four-factor autonomous trust engine.
+Gates every remediation action before the Executor runs.
 """
 
 import json
 import os
 import structlog
-from datetime import datetime
-from typing import Optional, Dict, Any
-from dataclasses import dataclass, asdict
+from datetime import datetime, timezone
 from enum import Enum
+from typing import Optional
 
-from .reversibility import ReversibilityAnalyzer
-from .blast_radius import BlastRadiusAnalyzer
-from .runbook_confidence import RunbookConfidenceAnalyzer
-from .history import HistoryAnalyzer
+from agents.trust.reversibility import ReversibilityScorer
+from agents.trust.blast_radius import BlastRadiusScorer
+from agents.trust.runbook_confidence import RunbookConfidenceScorer
+from agents.trust.history import HistoryScorer
 
 logger = structlog.get_logger(__name__)
 
-
-class ExecutionMode(str, Enum):
-    """Execution mode determined by trust score."""
-    EXECUTE = "execute"
-    DRYRUN_VERIFY = "dryrun_verify"
-    ESCALATE_HUMAN = "escalate_human"
+OUTCOMES_PATH = os.path.join(os.path.dirname(__file__), "../../outcomes.jsonl")
 
 
-@dataclass
-class TrustScoreResult:
-    """Result of trust score computation."""
-    final_score: float
-    execution_mode: ExecutionMode
-    reversibility_score: float
-    blast_radius_score: float
-    runbook_confidence_score: float
-    history_score: float
-    reasoning: str
-    timestamp: str
-    action_id: str
-    alert_id: str
+class TrustDecision(str, Enum):
+    EXECUTE = "EXECUTE"
+    DRYRUN_VERIFY = "DRYRUN_VERIFY"
+    ESCALATE_HUMAN = "ESCALATE_HUMAN"
 
 
-class TrustScoreEngine:
-    """
-    Main trust scoring engine.
-    
-    Computes a composite trust score for remediation actions and determines
-    the appropriate execution mode.
-    """
+class TrustReport:
+    """Structured trust assessment result."""
 
     def __init__(
         self,
-        execute_threshold: float = 90.0,
-        dryrun_threshold: float = 70.0,
-        escalation_timeout_seconds: int = 300,
+        alert_id: str,
+        total_score: float,
+        decision: TrustDecision,
+        factors: dict,
+        reasoning: list[str],
+        timestamp: Optional[str] = None,
     ):
-        """
-        Initialize the trust score engine.
-        
-        Args:
-            execute_threshold: Score threshold for immediate execution (default 90)
-            dryrun_threshold: Score threshold for dry-run verification (default 70)
-            escalation_timeout_seconds: Timeout for human escalation (default 300s)
-        """
-        self.execute_threshold = execute_threshold
-        self.dryrun_threshold = dryrun_threshold
-        self.escalation_timeout_seconds = escalation_timeout_seconds
+        self.alert_id = alert_id
+        self.total_score = round(total_score, 2)
+        self.decision = decision
+        self.factors = factors
+        self.reasoning = reasoning
+        self.timestamp = timestamp or datetime.now(timezone.utc).isoformat()
 
-        # Initialize sub-analyzers
-        self.reversibility = ReversibilityAnalyzer()
-        self.blast_radius = BlastRadiusAnalyzer()
-        self.runbook_confidence = RunbookConfidenceAnalyzer()
-        self.history = HistoryAnalyzer()
-
-        # Weights for composite score
-        self.weights = {
-            "reversibility": 0.30,
-            "blast_radius": 0.25,
-            "runbook_confidence": 0.25,
-            "history": 0.20,
+    def to_dict(self) -> dict:
+        return {
+            "alert_id": self.alert_id,
+            "total_score": self.total_score,
+            "decision": self.decision.value,
+            "factors": self.factors,
+            "reasoning": self.reasoning,
+            "timestamp": self.timestamp,
         }
 
-        # Outcomes log for audit trail
-        self.outcomes_file = "outcomes.jsonl"
 
-    def compute_score(
+class TrustScore:
+    """
+    Computes a weighted trust score from four independent factors.
+    Weights:
+      - reversibility:     30%
+      - blast_radius:      25%
+      - runbook_confidence: 25%
+      - history:           20%
+
+    Decision thresholds:
+      - score >= 90: EXECUTE
+      - score >= 70 and < 90: DRYRUN_VERIFY
+      - score < 70: ESCALATE_HUMAN
+      - Any failure/exception during computation: ESCALATE_HUMAN (fail-safe)
+    """
+
+    WEIGHTS = {
+        "reversibility": 0.30,
+        "blast_radius": 0.25,
+        "runbook_confidence": 0.25,
+        "history": 0.20,
+    }
+
+    EXECUTE_THRESHOLD = 90
+    DRYRUN_THRESHOLD = 70
+
+    def __init__(self):
+        self.reversibility = ReversibilityScorer()
+        self.blast_radius = BlastRadiusScorer()
+        self.runbook_confidence = RunbookConfidenceScorer()
+        self.history = HistoryScorer()
+
+    def evaluate(
         self,
         alert_id: str,
-        action_id: str,
         action_type: str,
-        target_resource: Dict[str, Any],
-        remediation_plan: Dict[str, Any],
-        cluster_state: Optional[Dict[str, Any]] = None,
-    ) -> TrustScoreResult:
+        risk_level: str,
+        parameters: dict,
+        runbook_name: str = "",
+        namespace: str = "",
+    ) -> TrustReport:
         """
-        Compute the trust score for a remediation action.
-        
-        Args:
-            alert_id: Unique identifier for the alert
-            action_id: Unique identifier for the action
-            action_type: Type of action (e.g., 'scale_down', 'rollback', 'patch')
-            target_resource: Resource being remediated (e.g., deployment, pod)
-            remediation_plan: Planned remediation steps
-            cluster_state: Current cluster state (optional)
-            
-        Returns:
-            TrustScoreResult with final score and execution mode
+        Compute the trust score and return a TrustReport with the decision.
+
+        Falls back to ESCALATE_HUMAN on any scoring failure (fail-safe).
         """
-        logger.info(
-            "trust_score_compute_start",
-            alert_id=alert_id,
-            action_id=action_id,
-            action_type=action_type,
-        )
+        reasoning: list[str] = []
 
-        # Compute sub-scores
-        reversibility_score = self.reversibility.analyze(
-            action_type=action_type,
-            target_resource=target_resource,
-            remediation_plan=remediation_plan,
-        )
-
-        blast_radius_score = self.blast_radius.analyze(
-            action_type=action_type,
-            target_resource=target_resource,
-            cluster_state=cluster_state,
-        )
-
-        runbook_confidence_score = self.runbook_confidence.analyze(
-            remediation_plan=remediation_plan,
-            action_type=action_type,
-        )
-
-        history_score = self.history.analyze(
-            action_type=action_type,
-            alert_id=alert_id,
-        )
-
-        # Compute weighted final score
-        final_score = (
-            self.weights["reversibility"] * reversibility_score
-            + self.weights["blast_radius"] * blast_radius_score
-            + self.weights["runbook_confidence"] * runbook_confidence_score
-            + self.weights["history"] * history_score
-        )
-
-        # Determine execution mode
-        if final_score >= self.execute_threshold:
-            execution_mode = ExecutionMode.EXECUTE
-            reasoning = f"Trust score {final_score:.1f} >= {self.execute_threshold} threshold. Executing immediately."
-        elif final_score >= self.dryrun_threshold:
-            execution_mode = ExecutionMode.DRYRUN_VERIFY
-            reasoning = f"Trust score {final_score:.1f} in range [{self.dryrun_threshold}, {self.execute_threshold}). Dry-run first, then live if successful."
-        else:
-            execution_mode = ExecutionMode.ESCALATE_HUMAN
-            reasoning = f"Trust score {final_score:.1f} < {self.dryrun_threshold} threshold. Escalating to human for approval."
-
-        result = TrustScoreResult(
-            final_score=round(final_score, 2),
-            execution_mode=execution_mode,
-            reversibility_score=round(reversibility_score, 2),
-            blast_radius_score=round(blast_radius_score, 2),
-            runbook_confidence_score=round(runbook_confidence_score, 2),
-            history_score=round(history_score, 2),
-            reasoning=reasoning,
-            timestamp=datetime.utcnow().isoformat() + "Z",
-            action_id=action_id,
-            alert_id=alert_id,
-        )
-
-        logger.info(
-            "trust_score_computed",
-            alert_id=alert_id,
-            action_id=action_id,
-            final_score=result.final_score,
-            execution_mode=result.execution_mode.value,
-            reversibility=result.reversibility_score,
-            blast_radius=result.blast_radius_score,
-            runbook_confidence=result.runbook_confidence_score,
-            history=result.history_score,
-        )
-
-        # Log outcome
-        self._log_outcome(result)
-
-        return result
-
-    def _log_outcome(self, result: TrustScoreResult) -> None:
-        """
-        Log the trust score outcome to outcomes.jsonl for audit trail.
-        
-        Args:
-            result: TrustScoreResult to log
-        """
         try:
-            with open(self.outcomes_file, "a") as f:
-                f.write(json.dumps(asdict(result), default=str) + "\n")
-        except Exception as e:
-            logger.warning("failed_to_log_outcome", error=str(e))
+            # Factor 1: Reversibility (30%)
+            rev_score, rev_reason = self.reversibility.score(action_type, parameters)
+            reasoning.append(f"Reversibility ({rev_score}/100): {rev_reason}")
 
-    def get_execution_mode_description(self, mode: ExecutionMode) -> str:
-        """Get human-readable description of execution mode."""
-        descriptions = {
-            ExecutionMode.EXECUTE: "Execute immediately without dry-run",
-            ExecutionMode.DRYRUN_VERIFY: "Perform dry-run first, then execute if successful",
-            ExecutionMode.ESCALATE_HUMAN: "Escalate to human for approval",
+            # Factor 2: Blast Radius (25%)
+            blast_score, blast_reason = self.blast_radius.score(
+                action_type, risk_level, parameters, namespace
+            )
+            reasoning.append(f"Blast Radius ({blast_score}/100): {blast_reason}")
+
+            # Factor 3: Runbook Confidence (25%)
+            runbook_score, runbook_reason = self.runbook_confidence.score(runbook_name, action_type)
+            reasoning.append(f"Runbook Confidence ({runbook_score}/100): {runbook_reason}")
+
+            # Factor 4: History (20%)
+            history_score, history_reason = self.history.score(alert_id, action_type, runbook_name)
+            reasoning.append(f"History ({history_score}/100): {history_reason}")
+
+            factors = {
+                "reversibility": rev_score,
+                "blast_radius": blast_score,
+                "runbook_confidence": runbook_score,
+                "history": history_score,
+            }
+
+            # Weighted total
+            total = sum(
+                factors[key] * self.WEIGHTS[key] for key in self.WEIGHTS
+            )
+
+            decision = self._classify(total)
+
+            logger.info(
+                "trust_score_computed",
+                alert_id=alert_id,
+                total_score=round(total, 2),
+                decision=decision.value,
+            )
+
+            return TrustReport(
+                alert_id=alert_id,
+                total_score=total,
+                decision=decision,
+                factors=factors,
+                reasoning=reasoning,
+            )
+
+        except Exception as e:
+            logger.error("trust_score_error", alert_id=alert_id, error=str(e))
+            reasoning.append(f"ERROR: {str(e)} — falling back to ESCALATE_HUMAN")
+            return TrustReport(
+                alert_id=alert_id,
+                total_score=0,
+                decision=TrustDecision.ESCALATE_HUMAN,
+                factors={
+                    "reversibility": 0,
+                    "blast_radius": 0,
+                    "runbook_confidence": 0,
+                    "history": 0,
+                },
+                reasoning=reasoning,
+            )
+
+    def _classify(self, score: float) -> TrustDecision:
+        if score >= self.EXECUTE_THRESHOLD:
+            return TrustDecision.EXECUTE
+        if score >= self.DRYRUN_THRESHOLD:
+            return TrustDecision.DRYRUN_VERIFY
+        return TrustDecision.ESCALATE_HUMAN
+
+    def record_outcome(
+        self,
+        alert_id: str,
+        trust_report: TrustReport,
+        success: bool,
+        action_taken: str,
+        duration_seconds: float,
+        error: Optional[str] = None,
+    ):
+        """Append an outcome record to outcomes.jsonl for history tracking."""
+        record = {
+            "alert_id": alert_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "trust_score": trust_report.total_score,
+            "decision": trust_report.decision.value,
+            "factors": trust_report.factors,
+            "success": success,
+            "action_taken": action_taken,
+            "duration_seconds": duration_seconds,
+            "error": error,
         }
-        return descriptions.get(mode, "Unknown mode")
+        try:
+            os.makedirs(os.path.dirname(OUTCOMES_PATH), exist_ok=True)
+            with open(OUTCOMES_PATH, "a") as f:
+                f.write(json.dumps(record) + "\n")
+            logger.info("outcome_recorded", alert_id=alert_id, success=success)
+        except Exception as e:
+            logger.error("outcome_write_error", alert_id=alert_id, error=str(e))
