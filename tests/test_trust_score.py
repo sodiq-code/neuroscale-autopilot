@@ -1,352 +1,233 @@
 """
-Test suite for NeuroScale v2 Trust Score Engine.
-
-Tests cover:
-- Trust score computation
-- Sub-score calculations (reversibility, blast radius, runbook confidence, history)
-- Execution mode determination
-- Decision path validation
-- Edge cases and boundary conditions
+Tests for the Verifiable Trust Layer (TrustScore).
+Covers EXECUTE, DRYRUN_VERIFY, ESCALATE_HUMAN decisions, failure fallback, and history scoring.
 """
 
 import pytest
+import os
+import tempfile
 import json
-from datetime import datetime
-from agents.trust import (
-    TrustScoreEngine,
-    ReversibilityAnalyzer,
-    BlastRadiusAnalyzer,
-    RunbookConfidenceAnalyzer,
-    HistoryAnalyzer,
-)
-from agents.trust.score import ExecutionMode
+from unittest.mock import patch
 
 
-class TestTrustScoreEngine:
-    """Tests for the main trust score engine."""
+# ─── Setup ────────────────────────────────────────────────────────────────────
 
-    @pytest.fixture
-    def engine(self):
-        """Create a trust score engine instance."""
-        return TrustScoreEngine(
-            execute_threshold=90.0,
-            dryrun_threshold=70.0,
-            escalation_timeout_seconds=300,
+def setup_module():
+    os.environ.setdefault("QWEN_API_KEY", "mock-trust-key")
+
+
+# ─── TrustScore Decision Tests ─────────────────────────────────────────────────
+
+def test_trust_score_execute_decision():
+    """TrustScore >= 90 yields EXECUTE."""
+    from agents.trust.score import TrustScore, TrustDecision
+    ts = TrustScore()
+
+    # Mock all factors to return high scores
+    with patch.object(ts.reversibility, 'score', return_value=(100.0, "fully reversible")):
+        with patch.object(ts.blast_radius, 'score', return_value=(100.0, "no blast")):
+            with patch.object(ts.runbook_confidence, 'score', return_value=(90.0, "proven")):
+                with patch.object(ts.history, 'score', return_value=(100.0, "all successful")):
+                    report = ts.evaluate(
+                        alert_id="test-exec-001",
+                        action_type="monitor",
+                        risk_level="low",
+                        parameters={},
+                        runbook_name="monitor-only",
+                        namespace="default",
+                    )
+
+    expected = 100 * 0.30 + 100 * 0.25 + 90 * 0.25 + 100 * 0.20  # = 97.5
+    assert round(report.total_score, 1) == round(expected, 1)
+    assert report.decision == TrustDecision.EXECUTE
+
+
+def test_trust_score_dryrun_verify_decision():
+    """TrustScore >= 70 but < 90 yields DRYRUN_VERIFY."""
+    from agents.trust.score import TrustScore, TrustDecision
+    ts = TrustScore()
+
+    with patch.object(ts.reversibility, 'score', return_value=(80.0, "mostly reversible")):
+        with patch.object(ts.blast_radius, 'score', return_value=(80.0, "moderate blast")):
+            with patch.object(ts.runbook_confidence, 'score', return_value=(70.0, "average")):
+                with patch.object(ts.history, 'score', return_value=(70.0, "mixed")):
+                    report = ts.evaluate(
+                        alert_id="test-dryrun-001",
+                        action_type="scale_down",
+                        risk_level="medium",
+                        parameters={"target_replicas": 2},
+                        runbook_name="cost-spike-scale-down",
+                        namespace="staging",
+                    )
+
+    assert 70 <= report.total_score < 90
+    assert report.decision == TrustDecision.DRYRUN_VERIFY
+
+
+def test_trust_score_escalate_human_decision():
+    """TrustScore < 70 yields ESCALATE_HUMAN."""
+    from agents.trust.score import TrustScore, TrustDecision
+    ts = TrustScore()
+
+    with patch.object(ts.reversibility, 'score', return_value=(30.0, "dangerous")):
+        with patch.object(ts.blast_radius, 'score', return_value=(40.0, "wide blast")):
+            with patch.object(ts.runbook_confidence, 'score', return_value=(30.0, "untested")):
+                with patch.object(ts.history, 'score', return_value=(20.0, "mostly failures")):
+                    report = ts.evaluate(
+                        alert_id="test-esc-001",
+                        action_type="delete_resource",
+                        risk_level="critical",
+                        parameters={},
+                        runbook_name="dangerous-runbook",
+                        namespace="production",
+                    )
+
+    assert report.total_score < 70
+    assert report.decision == TrustDecision.ESCALATE_HUMAN
+
+
+def test_trust_score_failure_fallback():
+    """Any exception during scoring falls back to ESCALATE_HUMAN (fail-safe)."""
+    from agents.trust.score import TrustScore, TrustDecision
+    ts = TrustScore()
+
+    with patch.object(ts.reversibility, 'score', side_effect=RuntimeError("scorer crashed")):
+        report = ts.evaluate(
+            alert_id="test-fail-001",
+            action_type="patch_resources",
+            risk_level="low",
+            parameters={},
+            runbook_name="safe-runbook",
+            namespace="default",
         )
 
-    def test_engine_initialization(self, engine):
-        """Test engine initialization."""
-        assert engine.execute_threshold == 90.0
-        assert engine.dryrun_threshold == 70.0
-        assert engine.escalation_timeout_seconds == 300
-        assert engine.weights["reversibility"] == 0.30
-        assert engine.weights["blast_radius"] == 0.25
-        assert engine.weights["runbook_confidence"] == 0.25
-        assert engine.weights["history"] == 0.20
+    assert report.total_score == 0
+    assert report.decision == TrustDecision.ESCALATE_HUMAN
+    assert any("ERROR" in r for r in report.reasoning)
 
-    def test_high_trust_score_execute_mode(self, engine):
-        """Test that high trust scores result in EXECUTE mode."""
-        result = engine.compute_score(
-            alert_id="alert-001",
-            action_id="action-001",
-            action_type="scale_up",
-            target_resource={"kind": "Deployment", "name": "test-app"},
-            remediation_plan={
-                "runbook_found": True,
-                "retrieval_score": 0.95,
-                "retrieval_margin": 0.5,
-                "steps": ["scale-up"],
-                "rollback_plan": True,
-            },
+
+def test_trust_score_report_fields():
+    """TrustReport contains all required fields."""
+    from agents.trust.score import TrustScore, TrustReport, TrustDecision
+
+    report = TrustReport(
+        alert_id="test-fields-001",
+        total_score=85.5,
+        decision=TrustDecision.DRYRUN_VERIFY,
+        factors={"reversibility": 80, "blast_radius": 85, "runbook_confidence": 90, "history": 85},
+        reasoning=["reason 1", "reason 2"],
+    )
+
+    d = report.to_dict()
+    assert d["alert_id"] == "test-fields-001"
+    assert d["total_score"] == 85.5
+    assert d["decision"] == "DRYRUN_VERIFY"
+    assert len(d["factors"]) == 4
+    assert len(d["reasoning"]) == 2
+    assert "timestamp" in d
+
+
+def test_history_scoring_with_past_successes():
+    """History scorer returns high score when past outcomes were successful."""
+    from agents.trust.history import HistoryScorer
+
+    # Create temp outcomes file
+    tmpdir = tempfile.mkdtemp()
+    outcomes_path = os.path.join(tmpdir, "outcomes.jsonl")
+
+    with open(outcomes_path, "w") as f:
+        for _ in range(5):
+            f.write(json.dumps({"success": True, "action_taken": "scale_down"}) + "\n")
+
+    with patch("agents.trust.history.OUTCOMES_PATH", outcomes_path):
+        scorer = HistoryScorer()
+        score, reason = scorer.score("test-hist-001", "scale_down", "cost-spike-scale-down")
+
+    assert score >= 70   # all successes = high score
+    assert "5/5" in reason
+
+    import shutil
+    shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_history_scoring_with_past_failures():
+    """History scorer returns low score when past outcomes were mostly failures."""
+    from agents.trust.history import HistoryScorer
+
+    tmpdir = tempfile.mkdtemp()
+    outcomes_path = os.path.join(tmpdir, "outcomes.jsonl")
+
+    with open(outcomes_path, "w") as f:
+        f.write(json.dumps({"success": False, "action_taken": "rollback"}) + "\n")
+        f.write(json.dumps({"success": False, "action_taken": "rollback"}) + "\n")
+        f.write(json.dumps({"success": True, "action_taken": "rollback"}) + "\n")
+
+    with patch("agents.trust.history.OUTCOMES_PATH", outcomes_path):
+        scorer = HistoryScorer()
+        score, reason = scorer.score("test-hist-002", "rollback", "crashloop-rollback")
+
+    assert score <= 30  # 1/3 success = low
+    assert "1/3" in reason
+
+    import shutil
+    shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_trust_score_full_pipeline_with_all_factors():
+    """Full TrustScore evaluation exercises all 4 factors + decision classification."""
+    from agents.trust.score import TrustScore, TrustDecision
+    ts = TrustScore()
+
+    # Use real scorers (no mocks) to verify integration
+    report = ts.evaluate(
+        alert_id="test-full-001",
+        action_type="patch_resources",
+        risk_level="medium",
+        parameters={"namespace": "production", "deployment_name": "api-server", "new_memory_limit": "1Gi"},
+        runbook_name="oomkill-increase-memory",
+        namespace="production",
+    )
+
+    assert isinstance(report.total_score, float)
+    assert 0 <= report.total_score <= 100
+    assert report.decision in (TrustDecision.EXECUTE, TrustDecision.DRYRUN_VERIFY, TrustDecision.ESCALATE_HUMAN)
+    assert "reversibility" in report.factors
+    assert "blast_radius" in report.factors
+    assert "runbook_confidence" in report.factors
+    assert "history" in report.factors
+    assert len(report.reasoning) >= 4
+
+
+def test_outcome_recording():
+    """outcomes.jsonl is appended after action completion."""
+    from agents.trust.score import TrustScore, TrustReport, TrustDecision
+    tmpdir = tempfile.mkdtemp()
+    outcomes_path = os.path.join(tmpdir, "outcomes.jsonl")
+
+    ts = TrustScore()
+    report = TrustReport(
+        alert_id="test-record-001",
+        total_score=95.0,
+        decision=TrustDecision.EXECUTE,
+        factors={"reversibility": 100, "blast_radius": 100, "runbook_confidence": 90, "history": 85},
+        reasoning=["test"],
+    )
+
+    with patch("agents.trust.score.OUTCOMES_PATH", outcomes_path):
+        ts.record_outcome(
+            alert_id="test-record-001",
+            trust_report=report,
+            success=True,
+            action_taken="monitor",
+            duration_seconds=5.0,
         )
 
-        assert result.final_score >= 90.0
-        assert result.execution_mode == ExecutionMode.EXECUTE
-        assert "immediately" in result.reasoning.lower()
+    assert os.path.exists(outcomes_path)
+    with open(outcomes_path) as f:
+        records = [json.loads(line) for line in f if line.strip()]
+    assert len(records) == 1
+    assert records[0]["success"] is True
+    assert records[0]["decision"] == "EXECUTE"
 
-    def test_medium_trust_score_dryrun_mode(self, engine):
-        """Test that medium trust scores result in DRYRUN_VERIFY mode."""
-        result = engine.compute_score(
-            alert_id="alert-002",
-            action_id="action-002",
-            action_type="patch_resource",
-            target_resource={"kind": "ConfigMap", "name": "config"},
-            remediation_plan={
-                "runbook_found": True,
-                "retrieval_score": 0.70,
-                "retrieval_margin": 0.2,
-                "steps": ["patch"],
-            },
-        )
-
-        assert 70.0 <= result.final_score < 90.0
-        assert result.execution_mode == ExecutionMode.DRYRUN_VERIFY
-        assert "dry-run" in result.reasoning.lower()
-
-    def test_low_trust_score_escalate_mode(self, engine):
-        """Test that low trust scores result in ESCALATE_HUMAN mode."""
-        result = engine.compute_score(
-            alert_id="alert-003",
-            action_id="action-003",
-            action_type="delete_resource",
-            target_resource={"kind": "Pod", "name": "test-pod"},
-            remediation_plan={
-                "runbook_found": False,
-                "retrieval_score": 0.3,
-                "retrieval_margin": 0.0,
-            },
-        )
-
-        assert result.final_score < 70.0
-        assert result.execution_mode == ExecutionMode.ESCALATE_HUMAN
-        assert "escalat" in result.reasoning.lower()
-
-    def test_score_result_structure(self, engine):
-        """Test that score result has all required fields."""
-        result = engine.compute_score(
-            alert_id="alert-004",
-            action_id="action-004",
-            action_type="scale_down",
-            target_resource={"kind": "Deployment"},
-            remediation_plan={"runbook_found": True, "retrieval_score": 0.8},
-        )
-
-        assert result.final_score is not None
-        assert result.execution_mode is not None
-        assert result.reversibility_score is not None
-        assert result.blast_radius_score is not None
-        assert result.runbook_confidence_score is not None
-        assert result.history_score is not None
-        assert result.reasoning is not None
-        assert result.timestamp is not None
-        assert result.action_id == "action-004"
-        assert result.alert_id == "alert-004"
-
-    def test_score_is_normalized(self, engine):
-        """Test that all scores are normalized to 0-100."""
-        result = engine.compute_score(
-            alert_id="alert-005",
-            action_id="action-005",
-            action_type="scale_up",
-            target_resource={"kind": "Deployment"},
-            remediation_plan={"runbook_found": True, "retrieval_score": 0.9},
-        )
-
-        assert 0 <= result.final_score <= 100
-        assert 0 <= result.reversibility_score <= 100
-        assert 0 <= result.blast_radius_score <= 100
-        assert 0 <= result.runbook_confidence_score <= 100
-        assert 0 <= result.history_score <= 100
-
-
-class TestReversibilityAnalyzer:
-    """Tests for the reversibility analyzer."""
-
-    @pytest.fixture
-    def analyzer(self):
-        """Create a reversibility analyzer."""
-        return ReversibilityAnalyzer()
-
-    def test_scale_up_is_highly_reversible(self, analyzer):
-        """Test that scale-up is highly reversible."""
-        score = analyzer.analyze(
-            action_type="scale_up",
-            target_resource={"kind": "Deployment"},
-            remediation_plan={},
-        )
-        assert score >= 90
-
-    def test_delete_is_low_reversibility(self, analyzer):
-        """Test that delete has low reversibility."""
-        score = analyzer.analyze(
-            action_type="delete_resource",
-            target_resource={"kind": "Pod"},
-            remediation_plan={},
-        )
-        assert score <= 30
-
-    def test_rollback_with_backup_is_reversible(self, analyzer):
-        """Test that rollback with backup is highly reversible."""
-        score = analyzer.analyze(
-            action_type="rollback_deployment",
-            target_resource={"kind": "Deployment"},
-            remediation_plan={"has_backup": True, "rollback_plan": True},
-        )
-        assert score >= 85
-
-    def test_resource_adjustment_applied(self, analyzer):
-        """Test that resource type adjustment is applied."""
-        pv_score = analyzer.analyze(
-            action_type="patch_resource",
-            target_resource={"kind": "PersistentVolume"},
-            remediation_plan={},
-        )
-        pod_score = analyzer.analyze(
-            action_type="patch_resource",
-            target_resource={"kind": "Pod"},
-            remediation_plan={},
-        )
-        # PV should have lower score than Pod
-        assert pv_score < pod_score
-
-
-class TestBlastRadiusAnalyzer:
-    """Tests for the blast radius analyzer."""
-
-    @pytest.fixture
-    def analyzer(self):
-        """Create a blast radius analyzer."""
-        return BlastRadiusAnalyzer()
-
-    def test_single_pod_low_blast_radius(self, analyzer):
-        """Test that single pod has low blast radius."""
-        score = analyzer.analyze(
-            action_type="delete_pod",
-            target_resource={"kind": "Pod", "name": "test-pod"},
-        )
-        assert score >= 90
-
-    def test_deployment_with_replicas_higher_blast_radius(self, analyzer):
-        """Test that deployment with replicas has higher blast radius."""
-        score = analyzer.analyze(
-            action_type="scale_down",
-            target_resource={
-                "kind": "Deployment",
-                "spec": {"replicas": 10},
-            },
-        )
-        assert score < 90
-
-    def test_node_drain_high_blast_radius(self, analyzer):
-        """Test that node drain has high blast radius."""
-        score = analyzer.analyze(
-            action_type="drain_node",
-            target_resource={"kind": "Node", "name": "node-1"},
-            cluster_state={"pods_on_node": {"node-1": 50}},
-        )
-        assert score < 50
-
-
-class TestRunbookConfidenceAnalyzer:
-    """Tests for the runbook confidence analyzer."""
-
-    @pytest.fixture
-    def analyzer(self):
-        """Create a runbook confidence analyzer."""
-        return RunbookConfidenceAnalyzer()
-
-    def test_no_runbook_low_confidence(self, analyzer):
-        """Test that missing runbook results in low confidence."""
-        score = analyzer.analyze(
-            remediation_plan={"runbook_found": False},
-            action_type="scale_down",
-        )
-        assert score == 20.0
-
-    def test_high_retrieval_score_high_confidence(self, analyzer):
-        """Test that high retrieval score results in high confidence."""
-        score = analyzer.analyze(
-            remediation_plan={
-                "runbook_found": True,
-                "retrieval_score": 0.95,
-                "retrieval_margin": 0.5,
-                "steps": ["step1", "step2"],
-                "rollback_plan": True,
-            },
-            action_type="scale_down",
-        )
-        assert score >= 80
-
-    def test_low_retrieval_score_low_confidence(self, analyzer):
-        """Test that low retrieval score results in low confidence."""
-        score = analyzer.analyze(
-            remediation_plan={
-                "runbook_found": True,
-                "retrieval_score": 0.3,
-                "retrieval_margin": 0.0,
-            },
-            action_type="scale_down",
-        )
-        assert score < 50
-
-    def test_escalated_runbook_penalized(self, analyzer):
-        """Test that escalated runbooks are penalized."""
-        normal_score = analyzer.analyze(
-            remediation_plan={
-                "runbook_found": True,
-                "retrieval_score": 0.7,
-                "retrieval_escalated": False,
-            },
-            action_type="scale_down",
-        )
-        escalated_score = analyzer.analyze(
-            remediation_plan={
-                "runbook_found": True,
-                "retrieval_score": 0.7,
-                "retrieval_escalated": True,
-            },
-            action_type="scale_down",
-        )
-        assert escalated_score < normal_score
-
-
-class TestHistoryAnalyzer:
-    """Tests for the history analyzer."""
-
-    @pytest.fixture
-    def analyzer(self):
-        """Create a history analyzer."""
-        return HistoryAnalyzer(history_file="/tmp/test_outcomes.jsonl")
-
-    def test_no_history_neutral_score(self, analyzer):
-        """Test that no history results in neutral score."""
-        score = analyzer.analyze(
-            action_type="unknown_action",
-            alert_id="alert-001",
-        )
-        assert score == 50.0
-
-    def test_success_rate_to_score_conversion(self, analyzer):
-        """Test conversion of success rate to score."""
-        # High success rate should give high score
-        high_score = analyzer._success_rate_to_score(0.95, total_attempts=10)
-        assert high_score > 80
-
-        # Low success rate should give low score
-        low_score = analyzer._success_rate_to_score(0.3, total_attempts=10)
-        assert low_score < 50
-
-    def test_confidence_adjustment_applied(self, analyzer):
-        """Test that confidence adjustment is applied."""
-        # More attempts = higher confidence
-        confident_score = analyzer._success_rate_to_score(0.7, total_attempts=20)
-        uncertain_score = analyzer._success_rate_to_score(0.7, total_attempts=1)
-        assert confident_score > uncertain_score
-
-
-class TestExecutionModeDescription:
-    """Tests for execution mode descriptions."""
-
-    @pytest.fixture
-    def engine(self):
-        """Create a trust score engine."""
-        return TrustScoreEngine()
-
-    def test_execute_mode_description(self, engine):
-        """Test EXECUTE mode description."""
-        desc = engine.get_execution_mode_description(ExecutionMode.EXECUTE)
-        assert "immediately" in desc.lower()
-
-    def test_dryrun_mode_description(self, engine):
-        """Test DRYRUN_VERIFY mode description."""
-        desc = engine.get_execution_mode_description(ExecutionMode.DRYRUN_VERIFY)
-        assert "dry-run" in desc.lower()
-
-    def test_escalate_mode_description(self, engine):
-        """Test ESCALATE_HUMAN mode description."""
-        desc = engine.get_execution_mode_description(ExecutionMode.ESCALATE_HUMAN)
-        assert "human" in desc.lower()
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    import shutil
+    shutil.rmtree(tmpdir, ignore_errors=True)
