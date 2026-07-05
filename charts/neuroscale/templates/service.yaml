@@ -1,53 +1,14 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "neuroscale.fullname" . }}-api
+  name: neuroscale
   labels:
-    {{- include "neuroscale.labels" . | nindent 4 }}
-    component: api
+    app.kubernetes.io/name: neuroscale
 spec:
-  type: {{ .Values.service.api.type }}
-  ports:
-    - port: {{ .Values.service.api.port }}
-      targetPort: {{ .Values.service.api.targetPort }}
-      protocol: TCP
-      name: http
+  type: {{ .Values.service.type }}
   selector:
-    {{- include "neuroscale.selectorLabels" . | nindent 4 }}
-    component: analyzer
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "neuroscale.fullname" . }}-mcp
-  labels:
-    {{- include "neuroscale.labels" . | nindent 4 }}
-    component: mcp
-spec:
-  type: {{ .Values.service.mcp.type }}
+    app.kubernetes.io/name: neuroscale
   ports:
-    - port: {{ .Values.service.mcp.port }}
-      targetPort: {{ .Values.service.mcp.targetPort }}
-      protocol: TCP
-      name: http
-  selector:
-    {{- include "neuroscale.selectorLabels" . | nindent 4 }}
-    component: mcp
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "neuroscale.fullname" . }}-dashboard
-  labels:
-    {{- include "neuroscale.labels" . | nindent 4 }}
-    component: dashboard
-spec:
-  type: {{ .Values.service.dashboard.type }}
-  ports:
-    - port: {{ .Values.service.dashboard.port }}
-      targetPort: {{ .Values.service.dashboard.targetPort }}
-      protocol: TCP
-      name: http
-  selector:
-    {{- include "neuroscale.selectorLabels" . | nindent 4 }}
-    component: dashboard
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.port }}
