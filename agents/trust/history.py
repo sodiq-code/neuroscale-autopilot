@@ -1,151 +1,58 @@
-"""
-History Analyzer — Track historical success rates for action types.
-
-History reflects how successful a particular action type has been in the past.
-Actions with high success rates receive higher scores. New or rarely-used actions
-receive lower scores.
-
-Scoring:
-- High success rate (>90%): 85-100
-- Good success rate (70-90%): 70-85
-- Moderate success rate (50-70%): 50-70
-- Low success rate (<50%): 30-50
-- No history: 50 (neutral)
-"""
+"""History Scorer — has this action/runbook succeeded before for similar alerts?"""
 
 import json
 import os
 import structlog
-from typing import Dict, Any, Optional
-from collections import defaultdict
 
 logger = structlog.get_logger(__name__)
 
+OUTCOMES_PATH = os.path.join(os.path.dirname(__file__), "../../outcomes.jsonl")
 
-class HistoryAnalyzer:
-    """Analyzes historical success rates for action types."""
 
-    def __init__(self, history_file: str = "outcomes.jsonl"):
-        """
-        Initialize the history analyzer.
-        
-        Args:
-            history_file: Path to outcomes log file
-        """
-        self.history_file = history_file
-        self._cache: Optional[Dict[str, Dict[str, int]]] = None
+class HistoryScorer:
+    """Score based on past outcomes for similar actions."""
 
-    def analyze(
-        self,
-        action_type: str,
-        alert_id: str,
-    ) -> float:
-        """
-        Analyze historical success rate for an action type.
-        
-        Args:
-            action_type: Type of action (e.g., 'scale_down', 'rollback')
-            alert_id: Current alert ID (for context)
-            
-        Returns:
-            History score (0-100)
-        """
-        history = self._load_history()
-        action_history = history.get(action_type, {})
+    def __init__(self, max_history: int = 50):
+        self.max_history = max_history
 
-        total = action_history.get("total", 0)
-        successful = action_history.get("successful", 0)
+    def score(self, alert_id: str, action_type: str, runbook_name: str) -> tuple[float, str]:
+        outcomes = self._load_outcomes()
 
-        # No history: neutral score
-        if total == 0:
-            logger.debug(
-                "history_no_data",
-                action_type=action_type,
-                score=50,
-            )
-            return 50.0
+        # Filter to matching action type
+        matching = [
+            o for o in outcomes
+            if o.get("action_taken", "") == runbook_name
+            or o.get("action_taken", "") == action_type
+        ]
 
-        # Calculate success rate
-        success_rate = successful / total
+        if not matching:
+            return 50.0, "No history for this action — neutral (50)"
 
-        # Convert to score
-        score = self._success_rate_to_score(success_rate, total)
+        # Weight recent outcomes more heavily
+        total_weight = 0
+        weighted_success = 0
+        for i, outcome in enumerate(matching):
+            weight = 1.0 / (len(matching) - i + 1)  # more recent = higher weight
+            total_weight += weight
+            if outcome.get("success"):
+                weighted_success += weight
 
-        logger.debug(
-            "history_analyzed",
-            action_type=action_type,
-            total_attempts=total,
-            successful_attempts=successful,
-            success_rate=round(success_rate, 2),
-            score=score,
-        )
+        score = (weighted_success / total_weight * 100) if total_weight > 0 else 50
 
-        return score
+        success_count = sum(1 for o in matching if o.get("success"))
+        reason = f"{success_count}/{len(matching)} past successes for {action_type}"
+        return round(score, 2), reason
 
-    def _load_history(self) -> Dict[str, Dict[str, int]]:
-        """
-        Load historical outcomes from outcomes.jsonl file.
-        
-        Returns:
-            Dictionary mapping action types to success/total counts
-        """
-        if self._cache is not None:
-            return self._cache
-
-        history: Dict[str, Dict[str, int]] = defaultdict(
-            lambda: {"total": 0, "successful": 0}
-        )
-
-        if not os.path.exists(self.history_file):
-            self._cache = dict(history)
-            return self._cache
-
+    def _load_outcomes(self) -> list[dict]:
+        """Load outcome records from outcomes.jsonl."""
+        outcomes = []
         try:
-            with open(self.history_file, "r") as f:
-                for line in f:
-                    try:
-                        outcome = json.loads(line)
-                        # Infer action type from execution mode or other fields
-                        # For now, use a generic key
-                        action_key = outcome.get("action_id", "unknown")
-
-                        # Track total
-                        history[action_key]["total"] += 1
-
-                        # Track successful (assume successful if not failed)
-                        # This is a simplification; real implementation would check execution status
-                        history[action_key]["successful"] += 1
-
-                    except json.JSONDecodeError:
-                        continue
+            if os.path.exists(OUTCOMES_PATH):
+                with open(OUTCOMES_PATH) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            outcomes.append(json.loads(line))
         except Exception as e:
-            logger.warning("failed_to_load_history", error=str(e))
-
-        self._cache = dict(history)
-        return self._cache
-
-    def _success_rate_to_score(self, success_rate: float, total_attempts: int) -> float:
-        """
-        Convert success rate to a score, with confidence adjustment.
-        
-        Args:
-            success_rate: Success rate (0-1)
-            total_attempts: Number of total attempts (for confidence)
-            
-        Returns:
-            History score (0-100)
-        """
-        # Base score from success rate
-        base_score = success_rate * 100
-
-        # Adjust for confidence (more attempts = higher confidence)
-        confidence_factor = min(1.0, total_attempts / 10.0)
-
-        # Apply confidence adjustment
-        adjusted_score = 50 + (base_score - 50) * confidence_factor
-
-        return adjusted_score
-
-    def clear_cache(self) -> None:
-        """Clear the in-memory cache (useful for testing)."""
-        self._cache = None
+            logger.warning("history_load_error", error=str(e))
+        return outcomes[-self.max_history:]
