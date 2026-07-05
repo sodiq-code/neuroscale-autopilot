@@ -1,106 +1,56 @@
-"""
-Reversibility Analyzer — Assess whether an action can be undone.
-
-Reversibility is a key trust factor. Actions that can be easily rolled back
-receive higher scores. Actions that are destructive or hard to undo receive
-lower scores.
-
-Scoring:
-- Fully reversible (e.g., rollback, scale-up): 100
-- Partially reversible (e.g., config patch with backup): 70-80
-- Difficult to reverse (e.g., delete): 30-40
-- Non-reversible (e.g., data deletion): 10-20
-"""
+"""Reversibility Scorer — how easily can this action be undone?"""
 
 import structlog
-from typing import Dict, Any, Optional
 
 logger = structlog.get_logger(__name__)
 
+# Actions ranked by reversibility (0-100)
+REVERSIBILITY_MAP = {
+    "monitor":           100,  # read-only, fully safe
+    "get_pod_status":    100,
+    "get_pod_logs":      100,
+    "get_deployment_status": 100,
+    "create_exception":  80,   # can delete PolicyException
+    "patch_resources":   60,   # can revert patch, but pod may restart
+    "scale_down":        50,   # can scale up, but downtime in between
+    "rollback":          40,   # can re-apply newer version, but state is lost
+    "restart":           30,   # pod restart clears in-memory state
+    "delete_pod":        20,   # pod gone, IP changes
+    "delete_resource":   10,   # permanent unless backed by GitOps
+    "escalate":          100,  # no change, just notification
+}
 
-class ReversibilityAnalyzer:
-    """Analyzes the reversibility of remediation actions."""
 
-    # Action type reversibility baseline scores
-    REVERSIBILITY_BASELINE = {
-        "rollback_deployment": 95,
-        "scale_up": 100,
-        "scale_down": 90,
-        "patch_resource": 75,
-        "update_config": 70,
-        "create_exception": 85,
-        "delete_pod": 60,
-        "drain_node": 70,
-        "cordon_node": 95,
-        "uncordon_node": 100,
-        "restart_pod": 80,
-        "evict_pod": 70,
-        "apply_manifest": 60,
-        "delete_resource": 20,
-    }
+class ReversibilityScorer:
+    """Score how reversible an action is (0-100)."""
 
-    def analyze(
-        self,
-        action_type: str,
-        target_resource: Dict[str, Any],
-        remediation_plan: Dict[str, Any],
-    ) -> float:
-        """
-        Analyze reversibility of an action.
-        
-        Args:
-            action_type: Type of action being taken
-            target_resource: Resource being affected
-            remediation_plan: Planned remediation steps
-            
-        Returns:
-            Reversibility score (0-100)
-        """
-        # Start with baseline for action type
-        baseline = self.REVERSIBILITY_BASELINE.get(action_type, 50)
+    def score(self, action_type: str, parameters: dict) -> tuple[float, str]:
+        base = REVERSIBILITY_MAP.get(action_type, 50)
+        reason = f"Base={base}"
 
-        # Adjust based on resource type
-        resource_kind = target_resource.get("kind", "Unknown")
-        resource_adjustment = self._get_resource_adjustment(resource_kind)
+        # If it's a dry-run, reversibility is irrelevant = high
+        if parameters.get("dry_run") is True:
+            return 100.0, "Dry-run mode — no state changed"
 
-        # Adjust based on backup/snapshot availability
-        has_backup = remediation_plan.get("has_backup", False)
-        backup_adjustment = 10 if has_backup else 0
+        # Scale-related adjustments
+        if action_type == "scale_down":
+            replicas = parameters.get("target_replicas", 1)
+            try:
+                replicas = int(replicas)
+            except (TypeError, ValueError):
+                replicas = 0
+            if replicas == 0:
+                return 10.0, "Scale-to-zero is hard to reverse (cold start latency)"
+            if replicas >= 2:
+                base = 70  # multi-replica → failover exists
+                reason = f"Multi-replica ({replicas}), safe to re-scale"
+            else:
+                reason = f"Single-replica (fragile), base={base}"
 
-        # Adjust based on rollback plan
-        has_rollback = remediation_plan.get("rollback_plan", False)
-        rollback_adjustment = 15 if has_rollback else 0
+        if action_type == "rollback":
+            # If ArgoCD in use, rollback is more reversible (GitOps)
+            if parameters.get("argocd_app_name"):
+                base = 60
+                reason = "ArgoCD-backed — GitOps enables re-sync"
 
-        # Compute final score
-        score = baseline + resource_adjustment + backup_adjustment + rollback_adjustment
-
-        # Clamp to 0-100
-        score = max(0, min(100, score))
-
-        logger.debug(
-            "reversibility_analyzed",
-            action_type=action_type,
-            resource_kind=resource_kind,
-            baseline=baseline,
-            resource_adjustment=resource_adjustment,
-            backup_adjustment=backup_adjustment,
-            rollback_adjustment=rollback_adjustment,
-            final_score=score,
-        )
-
-        return score
-
-    def _get_resource_adjustment(self, resource_kind: str) -> float:
-        """Get adjustment factor based on resource type."""
-        adjustments = {
-            "Pod": -5,  # Pods are ephemeral, easier to replace
-            "Deployment": 5,  # Deployments have replicas, easier to recover
-            "StatefulSet": -10,  # StatefulSets have state, harder to recover
-            "PersistentVolume": -20,  # PVs have data, very hard to recover
-            "Node": -15,  # Nodes are infrastructure, risky
-            "ConfigMap": 10,  # ConfigMaps are easily replaceable
-            "Secret": -5,  # Secrets are sensitive
-            "Service": 5,  # Services are easily recreated
-            "Ingress": 5,  # Ingresses are easily recreated
-        }
-        return adjustments.get(resource_kind, 0)
+        return float(base), reason
