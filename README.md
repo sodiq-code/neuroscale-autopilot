@@ -104,10 +104,10 @@ Metrics → Detect → Analyze (Qwen-Max) → Plan (Qwen-Embedding RAG) → Exec
 **Hero Incident — Bad image tag injected into `checkout-service`, detected in real time**
 ![Checkout Incident](docs/screenshots-real/checkout-incident-detected.png)
 
-**Trust Layer Decision Card — Root cause, confidence, risk, rollback plan, human approval gate**
+**Trust Layer Decision Card — Real Qwen root cause analysis, confidence/risk scoring, remediation plan, rollback command, human approval gate**
 ![Trust Layer Decision Card](docs/screenshots-real/trust-layer-decision-card.png)
 
-> Note: the "Qwen Analysis" text in the decision card above shows a real `AccessDenied.Unpurchased` error because the DashScope account's model activation was still pending at the moment this incident ran. Rather than fail silently or fabricate a diagnosis, the system correctly marked confidence as `low`, risk as `high`, `auto_remediate: false`, and escalated to human approval — see [TRUST_LAYER.md](TRUST_LAYER.md#what-happens-when-the-model-itself-fails) for why that's the Trust Layer working as intended, not a bug.
+> Captured live: Qwen correctly diagnosed a non-existent container image tag as the root cause with `high` confidence and `low` risk, but the runbook retrieval similarity (0.59) came in just under the 0.65 auto-execute threshold — so the system correctly held for human approval instead of guessing. Full breakdown in [TRUST_LAYER.md](TRUST_LAYER.md).
 
 ---
 

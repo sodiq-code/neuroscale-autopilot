@@ -32,11 +32,20 @@ If **any** of these signals fall short, `requires_approval` flips to `true` and 
 
 ### Real example, captured live from this deployment
 
-During testing on the actual Alibaba Cloud cluster, the system caught its own retrieval failure and refused to guess:
+A bad image tag (`nginx:1.25-alpine-BADTAG-vBROKEN`) was pushed to the `checkout-service` deployment on the live Alibaba Cloud cluster. Qwen-Max correctly diagnosed it in seconds:
 
-> *"Risk level is high. Analyzer confidence is low. Runbook retrieval confidence is low — top match is ambiguous. A wrong runbook executed confidently is worse than no runbook. Analyzer recommends human review. Please approve or reject this remediation."*
+> **Root Cause:** *"The deployment references a non-existent container image tag 'nginx:1.25-alpine-BADTAG-vBROKEN' which does not exist in the Docker Hub registry. The image pull fails with a 'not found' error, preventing the pod from starting."*
+> **Confidence:** high · **Risk:** low · **Auto-remediate:** Yes
 
-That sentence — generated automatically by the Planner agent, not hand-written for a demo — is the Trust Layer working exactly as designed: it would rather escalate than act on a shaky match.
+The Analyzer alone was confident enough to auto-remediate. But the Planner's RAG runbook retrieval only scored **0.59 similarity** against the best-matching runbook — just under the 0.65 auto-execute threshold, with the second-best runbook only 0.025 behind it. So even with a confident, correct root cause, the system held for human approval rather than execute against an ambiguous runbook match:
+
+> *"Runbook retrieval confidence is low — top match is ambiguous. A wrong runbook executed confidently is worse than no runbook."*
+
+That's the Trust Layer's actual value: it doesn't just trust the LLM's confidence — it independently checks whether it actually has a good enough plan to execute, and escalates when it doesn't, even when the diagnosis itself was right.
+
+### An earlier example: when the model itself was unavailable
+
+During initial deployment, a separate Alibaba account configuration issue temporarily blocked all Qwen model calls (`AccessDenied.Unpurchased` — an account-level model-activation step, not a code bug). Rather than crash or fabricate a diagnosis, the system did exactly what it's designed to do when it can't get a confident signal: marked confidence `low`, risk `high`, `auto_remediate: false`, and escalated — all in under 3 seconds. See the benchmark section in the README for the exact measured timing.
 
 ## The Decision Card
 
