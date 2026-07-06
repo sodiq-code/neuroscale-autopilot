@@ -63,7 +63,7 @@ class AnalyzerAgent:
 
     def __init__(self):
         api_key = os.getenv("QWEN_API_KEY")
-        base_url = os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        base_url = os.getenv("QWEN_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
 
         if not api_key:
             raise ValueError("QWEN_API_KEY environment variable is required")

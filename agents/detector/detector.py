@@ -5,6 +5,7 @@ Fires structured alerts to the Analyzer Agent.
 """
 
 import asyncio
+import time
 import structlog
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -12,6 +13,13 @@ from kubernetes import client, config as k8s_config, watch
 from pydantic import BaseModel
 
 logger = structlog.get_logger(__name__)
+
+# How long to suppress a repeat alert for the same underlying issue before
+# re-emitting it. Without this, a persistent CrashLoopBackOff or a watch
+# reconnect that replays recent Kubernetes events would re-fire (and
+# re-trigger a full analyze->plan->escalate pipeline run, including real
+# Qwen API calls) for an issue that was already reported seconds ago.
+ALERT_SUPPRESSION_WINDOW_SECONDS = 300
 
 
 class Alert(BaseModel):
@@ -36,6 +44,17 @@ class DetectorAgent:
         self.kubeconfig = kubeconfig
         self._running = False
         self._tasks = []
+        # Tracks the last-seen Kubernetes event resourceVersion so that when
+        # the events watch reconnects (on its 60s timeout or after a
+        # transient error) it resumes from where it left off instead of
+        # re-listing and replaying recent events from scratch.
+        self._events_resource_version: Optional[str] = None
+        # De-duplication cache: alert dedup key -> epoch timestamp last emitted.
+        # Prevents the same ongoing issue (e.g. a pod stuck in
+        # ImagePullBackOff, or a replayed watch event) from re-triggering a
+        # brand-new pipeline run every time the underlying condition is
+        # observed again within the suppression window.
+        self._recent_alerts: dict[str, float] = {}
 
         try:
             if kubeconfig:
@@ -72,21 +91,36 @@ class DetectorAgent:
         logger.info("detector_agent_stopped")
 
     async def _watch_pod_events(self):
-        """Watch for pod-level warning events (OOMKill, BackOff, Failed)."""
+        """Watch for pod-level warning events (OOMKill, BackOff, Failed).
+
+        Resumes from the last-seen resourceVersion on reconnect instead of
+        re-listing from scratch, so a 60s timeout or transient error doesn't
+        cause recently-handled events to be replayed and re-processed as if
+        they were brand new (see ALERT_SUPPRESSION_WINDOW_SECONDS for the
+        second, independent safeguard against that).
+        """
         logger.info("watching_pod_events")
         w = watch.Watch()
 
         while self._running:
             try:
+                stream_kwargs = {"timeout_seconds": 60}
+                if self._events_resource_version:
+                    stream_kwargs["resource_version"] = self._events_resource_version
+
                 for event in w.stream(
                     self.core_v1.list_event_for_all_namespaces,
-                    timeout_seconds=60
+                    **stream_kwargs
                 ):
                     obj = event["object"]
+                    if obj.metadata and obj.metadata.resource_version:
+                        self._events_resource_version = obj.metadata.resource_version
+
                     reason = obj.reason or ""
                     message = obj.message or ""
                     namespace = obj.metadata.namespace or "default"
                     involved = obj.involved_object
+                    resource_name = involved.name or "unknown"
 
                     if reason in ("OOMKilling", "OOMKilled"):
                         await self._emit_alert(Alert(
@@ -95,14 +129,14 @@ class DetectorAgent:
                             severity="critical",
                             type="oomkill",
                             namespace=namespace,
-                            resource=involved.name or "unknown",
+                            resource=resource_name,
                             message=f"OOMKill detected: {message}",
                             raw_data={
                                 "reason": reason,
                                 "kind": involved.kind,
                                 "count": obj.count,
                             }
-                        ))
+                        ), dedup_key=f"oomkill:{namespace}:{resource_name}")
 
                     elif reason in ("BackOff", "CrashLoopBackOff"):
                         await self._emit_alert(Alert(
@@ -111,14 +145,14 @@ class DetectorAgent:
                             severity="critical",
                             type="crashloop",
                             namespace=namespace,
-                            resource=involved.name or "unknown",
+                            resource=resource_name,
                             message=f"CrashLoop detected: {message}",
                             raw_data={
                                 "reason": reason,
                                 "kind": involved.kind,
                                 "count": obj.count,
                             }
-                        ))
+                        ), dedup_key=f"crashloop:{namespace}:{resource_name}")
 
                     elif reason in ("Failed", "FailedCreate", "FailedScheduling"):
                         await self._emit_alert(Alert(
@@ -127,16 +161,22 @@ class DetectorAgent:
                             severity="warning",
                             type="deployment_failure",
                             namespace=namespace,
-                            resource=involved.name or "unknown",
+                            resource=resource_name,
                             message=f"Resource failure: {message}",
                             raw_data={"reason": reason, "kind": involved.kind}
-                        ))
+                        ), dedup_key=f"deployment_failure:{namespace}:{resource_name}")
 
                     await asyncio.sleep(0)
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
+                # A stale/expired resourceVersion (410 Gone) means Kubernetes
+                # has compacted past it — fall back to a fresh list on the
+                # next iteration rather than looping on the same error.
+                if "410" in str(e) or "Expired" in str(e):
+                    logger.warning("events_resource_version_expired_resetting")
+                    self._events_resource_version = None
                 logger.error("pod_events_watch_error", error=str(e))
                 await asyncio.sleep(5)
 
@@ -164,7 +204,7 @@ class DetectorAgent:
                                         "exit_code": term.exit_code,
                                         "finished_at": str(term.finished_at),
                                     }
-                                ))
+                                ), dedup_key=f"oomkill:{pod.metadata.namespace}:{pod.metadata.name}:{cs.name}")
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -196,7 +236,7 @@ class DetectorAgent:
                                         "restart_count": cs.restart_count,
                                         "waiting_reason": cs.state.waiting.reason,
                                     }
-                                ))
+                                ), dedup_key=f"crashloop-scan:{pod.metadata.namespace}:{pod.metadata.name}:{cs.name}")
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -204,8 +244,33 @@ class DetectorAgent:
 
             await asyncio.sleep(20)
 
-    async def _emit_alert(self, alert: Alert):
-        """Fire alert to handler."""
+    async def _emit_alert(self, alert: Alert, dedup_key: Optional[str] = None):
+        """Fire alert to handler.
+
+        If `dedup_key` is provided, suppress this alert when the same key
+        was already emitted within ALERT_SUPPRESSION_WINDOW_SECONDS. This is
+        what stops a persistent issue (e.g. a pod stuck in
+        ImagePullBackOff for minutes) — or a watch reconnect replaying an
+        event that was already handled — from re-triggering a brand new
+        analyze -> plan -> escalate pipeline run (including real Qwen API
+        calls) every few seconds for the exact same underlying problem.
+        Alerts without a dedup_key (e.g. manual demo triggers) always fire.
+        """
+        if dedup_key:
+            now = time.monotonic()
+            last_emitted = self._recent_alerts.get(dedup_key)
+            if last_emitted is not None and (now - last_emitted) < ALERT_SUPPRESSION_WINDOW_SECONDS:
+                logger.debug("alert_suppressed_duplicate",
+                             dedup_key=dedup_key,
+                             seconds_since_last=round(now - last_emitted, 1))
+                return
+            self._recent_alerts[dedup_key] = now
+            # Bound the cache so long-running deployments don't leak memory.
+            if len(self._recent_alerts) > 500:
+                oldest_keys = sorted(self._recent_alerts, key=self._recent_alerts.get)[:100]
+                for k in oldest_keys:
+                    del self._recent_alerts[k]
+
         logger.info("alert_fired",
                     type=alert.type,
                     severity=alert.severity,

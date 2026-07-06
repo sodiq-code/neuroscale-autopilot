@@ -35,6 +35,76 @@ def test_alert_model():
     assert alert.type == "oomkill"
 
 
+def _make_detector():
+    """Build a DetectorAgent without touching a real cluster (mocked k8s clients)."""
+    from agents.detector.detector import DetectorAgent
+    with patch("agents.detector.detector.k8s_config.load_incluster_config", side_effect=Exception()), \
+         patch("agents.detector.detector.k8s_config.load_kube_config", side_effect=Exception()), \
+         patch("agents.detector.detector.client.CoreV1Api"), \
+         patch("agents.detector.detector.client.AppsV1Api"):
+        return DetectorAgent(on_alert=AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_emit_alert_without_dedup_key_always_fires():
+    """Alerts with no dedup_key (e.g. manual demo triggers) are never suppressed."""
+    detector = _make_detector()
+    from agents.detector.detector import Alert
+    alert = Alert(id="a1", timestamp=datetime.now(timezone.utc).isoformat(), severity="warning",
+                  type="deployment_failure", namespace="default", resource="x", message="m", raw_data={})
+    await detector._emit_alert(alert)
+    await detector._emit_alert(alert)
+    assert detector.on_alert.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_emit_alert_dedup_suppresses_repeat_within_window():
+    """The same dedup_key within the suppression window fires only once.
+
+    This is the regression test for the detector bug where a Kubernetes
+    events watch reconnect (or a persistent issue like ImagePullBackOff)
+    would replay/re-observe the same underlying problem and re-trigger a
+    brand new pipeline run — including a real Qwen API call — every time.
+    """
+    detector = _make_detector()
+    from agents.detector.detector import Alert
+    alert = Alert(id="a1", timestamp=datetime.now(timezone.utc).isoformat(), severity="warning",
+                  type="deployment_failure", namespace="checkout", resource="checkout-service",
+                  message="m", raw_data={})
+    await detector._emit_alert(alert, dedup_key="deployment_failure:checkout:checkout-service")
+    await detector._emit_alert(alert, dedup_key="deployment_failure:checkout:checkout-service")
+    await detector._emit_alert(alert, dedup_key="deployment_failure:checkout:checkout-service")
+    assert detector.on_alert.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_emit_alert_dedup_allows_after_window_expires():
+    """Once the suppression window elapses, the same dedup_key can fire again."""
+    detector = _make_detector()
+    from agents.detector.detector import Alert
+    alert = Alert(id="a1", timestamp=datetime.now(timezone.utc).isoformat(), severity="warning",
+                  type="crashloop", namespace="default", resource="x", message="m", raw_data={})
+    await detector._emit_alert(alert, dedup_key="crashloop:default:x")
+    # Simulate the window having already elapsed.
+    detector._recent_alerts["crashloop:default:x"] -= 301
+    await detector._emit_alert(alert, dedup_key="crashloop:default:x")
+    assert detector.on_alert.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_emit_alert_dedup_distinguishes_different_resources():
+    """Different resources under the same alert type are never cross-suppressed."""
+    detector = _make_detector()
+    from agents.detector.detector import Alert
+    alert_a = Alert(id="a1", timestamp=datetime.now(timezone.utc).isoformat(), severity="warning",
+                     type="crashloop", namespace="default", resource="pod-a", message="m", raw_data={})
+    alert_b = Alert(id="a2", timestamp=datetime.now(timezone.utc).isoformat(), severity="warning",
+                     type="crashloop", namespace="default", resource="pod-b", message="m", raw_data={})
+    await detector._emit_alert(alert_a, dedup_key="crashloop:default:pod-a")
+    await detector._emit_alert(alert_b, dedup_key="crashloop:default:pod-b")
+    assert detector.on_alert.await_count == 2
+
+
 # ─── Analyzer Tests ────────────────────────────────────────────────────────────
 
 def test_analyzer_imports():

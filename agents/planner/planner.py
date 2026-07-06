@@ -58,7 +58,7 @@ class PlannerAgent:
 
     def __init__(self):
         api_key = os.getenv("QWEN_API_KEY")
-        base_url = os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        base_url = os.getenv("QWEN_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
 
         self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         self.embedding_model = os.getenv("QWEN_EMBEDDING_MODEL", "text-embedding-v3")

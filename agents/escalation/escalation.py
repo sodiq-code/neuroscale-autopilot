@@ -47,7 +47,7 @@ class EscalationAgent:
 
     def __init__(self):
         api_key = os.getenv("QWEN_API_KEY")
-        base_url = os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        base_url = os.getenv("QWEN_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
         self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         self.turbo_model = os.getenv("QWEN_MODEL_TURBO", "qwen-turbo")
         self.slack_webhook = os.getenv("SLACK_WEBHOOK_URL", "")

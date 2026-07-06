@@ -111,16 +111,22 @@ This is the entire thesis of the project, rendered live: Qwen correctly diagnose
 
 ## Proof of Deployment
 
-Three independent pieces of evidence, none of which can be faked without actually having a running Alibaba Cloud account and a live deployment:
+Full point-by-point response to the hackathon's proof-of-deployment requirement, with independent verification steps you can run yourself, lives in **[PROOF_OF_DEPLOYMENT.md](PROOF_OF_DEPLOYMENT.md)**. Summary:
 
 1. **Alibaba Cloud Console — ECS Instance** (`docs/proof/alibaba-console-ecs-instance.png`)
    Screenshot taken directly from `ecs.console.alibabacloud.com`, showing instance `i-t4n4aarar9svc41kmq8r`, region Singapore, status Running, public IP `43.98.177.117`, live CPU utilization — the exact instance backing every screenshot and log in this README.
 
    ![Alibaba Console Proof](docs/proof/alibaba-console-ecs-instance.png)
 
-2. **Qwen Cloud base URL in code** — see [`agents/analyzer`](agents/analyzer) and [`.env.example`](.env.example) for the `QWEN_BASE_URL` pointing at the Model Studio `.../compatible-mode/v1` endpoint actually used by this deployment.
+2. **Qwen Cloud base URL in code** — [`agents/analyzer/analyzer.py`](agents/analyzer/analyzer.py#L66) defaults to `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`, one of the exact Base URLs specified in the hackathon guidance. See [PROOF_OF_DEPLOYMENT.md](PROOF_OF_DEPLOYMENT.md) for what this live deployment's Token Plan endpoint actually resolves to.
 
 3. **Raw live API response** (`docs/proof/live-api-response.json`) — an unedited `curl` capture of `GET /api/incidents` against `43.98.177.117:8000`, showing the exact same incident, timestamp, and error string visible in the screenshots above, straight from the server with no UI in between.
+
+4. **Verify it yourself right now:**
+   ```bash
+   curl http://43.98.177.117:8000/health
+   curl http://43.98.177.117:8000/api/incidents
+   ```
 
 ---
 

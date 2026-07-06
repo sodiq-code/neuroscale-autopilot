@@ -9,7 +9,7 @@ services:
       - "8000:8000"
     environment:
       - QWEN_API_KEY=${QWEN_API_KEY}
-      - QWEN_BASE_URL=${QWEN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - QWEN_BASE_URL=${QWEN_BASE_URL:-https://dashscope-intl.aliyuncs.com/compatible-mode/v1}
       - QWEN_MODEL_MAX=${QWEN_MODEL_MAX:-qwen-max}
       - QWEN_MODEL_TURBO=${QWEN_MODEL_TURBO:-qwen-turbo}
       - QWEN_MODEL_EMBEDDING=${QWEN_MODEL_EMBEDDING:-text-embedding-v3}
