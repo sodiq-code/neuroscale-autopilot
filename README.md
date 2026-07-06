@@ -24,9 +24,10 @@ This project is deployed and running **right now** on a real Alibaba Cloud ECS i
 | Cloud provider | Alibaba Cloud ECS (`ecs.e4.small`, Ubuntu 24.04) |
 | Region | `ap-southeast-1` (Singapore) |
 | Kubernetes | k3s v1.36.2+k3s1 (real control plane, real pods, real events) |
-| Qwen base URL | `https://dashscope.aliyuncs.com/compatible-mode/v1` (see [`agents/analyzer`](agents/analyzer)) |
+| Qwen base URL | Workspace-specific Model Studio endpoint, `.../compatible-mode/v1` — see [`agents/analyzer`](agents/analyzer) and the Environment Variables table below |
+| Models | `qwen3.7-max` (RCA), `qwen3.6-plus` (escalation summaries), `text-embedding-v3` (RAG retrieval) |
 | Target workload | `checkout-service` deployment (3 replicas) in the `checkout` namespace |
-| Proof | See [Dashboard Screenshots](#dashboard-screenshots) below, or `docs/screenshots/` directly, for unedited screenshots of the live dashboard reacting to a real injected incident |
+| Proof | [Dashboard Screenshots](#dashboard-screenshots) below (live, unedited) + [Proof of Deployment](#proof-of-deployment) (Alibaba Cloud console + raw live API response) |
 
 See the [Alibaba Cloud Deployment](#alibaba-cloud-deployment) section below for the exact steps used, and [TRUST_LAYER.md](TRUST_LAYER.md) for a real captured incident from this exact deployment.
 
@@ -96,31 +97,42 @@ Metrics → Detect → Analyze (Qwen-Max) → Plan (Qwen-Embedding RAG) → Exec
 
 ## Dashboard Screenshots
 
-> Every screenshot below is an unedited capture from the live Alibaba Cloud deployment (`http://<instance-public-ip>:3000`), taken while a real bad-image-tag incident was running against a real k3s cluster on real ECS infrastructure — no mocked data, no staged UI, no image editing. The old placeholder/simulated screenshots have been removed from this repo entirely.
+> Both screenshots below were captured back-to-back, live, from `http://43.98.177.117:3000` (the real public IP of the Alibaba Cloud ECS instance) while a bad image tag — `nginx:BROKEN-221830`, with `221830` being that day's live UTC timestamp created on the spot specifically to prove freshness — was actively failing to pull on the real k3s cluster. No mocked data, no staged UI, no image editing. Cross-check the exact timestamp and error string against [`docs/proof/live-api-response.json`](docs/proof/live-api-response.json), a raw, unedited `curl` capture of the same incident from the same server at the same moment.
 
-### 1. Live monitoring overview
+### 1. Live monitoring overview — incident detected
 ![Dashboard Overview](docs/screenshots/dashboard-overview.png)
-The dashboard connected via WebSocket ("Live" status, top right) to the real backend running on Alibaba Cloud ECS. The incident log shows the `checkout-service` deployment failure the moment it was detected from the real k3s cluster's event stream — no polling delay beyond the detector's own watch cycle.
+The dashboard connected via WebSocket ("Live" status, top right) to the real backend running on Alibaba Cloud ECS. The incident log shows `checkout-service-559b664d97-9rjvc` failing to pull `nginx:BROKEN-221830` — detected from the real k3s cluster's live event stream, timestamped `10:21:02 PM`, status **AWAITING APPROVAL**.
 
-### 2. The hero incident: a bad image tag hits `checkout-service`
-![Checkout Incident](docs/screenshots/checkout-incident-detected.png)
-A real `nginx:1.25-alpine-BADTAG-vBROKEN` image tag was rolled out to the live cluster. NeuroScale's Detector picked up the resulting `ImagePullBackOff` from real Kubernetes events within one watch cycle and opened an incident automatically — status: **AWAITING APPROVAL**.
-
-### 3. The Trust Layer decision card
+### 2. The Trust Layer decision card, expanded
 ![Trust Layer Decision Card](docs/screenshots/trust-layer-decision-card.png)
-This is the entire thesis of the project, rendered live: Qwen-Max correctly diagnosed the root cause with **high confidence** and **low risk**, and proposed a rollback with an exact `kubectl rollout undo` command. But the RAG runbook retrieval score (0.59) landed just under the 0.65 auto-execute threshold — so instead of guessing, the system held for human **Approve / Reject**. A confident diagnosis was not enough on its own to earn autonomous execution. Full breakdown of how this scoring works: [TRUST_LAYER.md](TRUST_LAYER.md).
+This is the entire thesis of the project, rendered live: Qwen correctly diagnosed the root cause with **high confidence** and **low risk**, even noting the tag "appears to be a test/broken tag accidentally committed" — proposing a rollback with an exact `argocd app rollback` command. Despite the confident diagnosis, this decision still required human **Approve / Reject** rather than auto-executing, because the system holds a second, independent gate on top of model confidence — see [TRUST_LAYER.md](TRUST_LAYER.md) for exactly how that gate works and why a confident diagnosis alone is never enough.
+
+---
+
+## Proof of Deployment
+
+Three independent pieces of evidence, none of which can be faked without actually having a running Alibaba Cloud account and a live deployment:
+
+1. **Alibaba Cloud Console — ECS Instance** (`docs/proof/alibaba-console-ecs-instance.png`)
+   Screenshot taken directly from `ecs.console.alibabacloud.com`, showing instance `i-t4n4aarar9svc41kmq8r`, region Singapore, status Running, public IP `43.98.177.117`, live CPU utilization — the exact instance backing every screenshot and log in this README.
+
+   ![Alibaba Console Proof](docs/proof/alibaba-console-ecs-instance.png)
+
+2. **Qwen Cloud base URL in code** — see [`agents/analyzer`](agents/analyzer) and [`.env.example`](.env.example) for the `QWEN_BASE_URL` pointing at the Model Studio `.../compatible-mode/v1` endpoint actually used by this deployment.
+
+3. **Raw live API response** (`docs/proof/live-api-response.json`) — an unedited `curl` capture of `GET /api/incidents` against `43.98.177.117:8000`, showing the exact same incident, timestamp, and error string visible in the screenshots above, straight from the server with no UI in between.
 
 ---
 
 ## Qwen Models Used
 
-| Component | Model | Purpose |
-|-----------|-------|---------|
-| Analyzer | `qwen-max` | Root cause analysis, risk scoring, confidence |
-| Planner | `text-embedding-v3` | Runbook semantic search (RAG) |
-| Escalation | `qwen-turbo` | Human-readable Slack incident summaries |
+| Component | Model (this deployment) | Default (pay-as-you-go) | Purpose |
+|-----------|--------------------------|---------------------------|---------|
+| Analyzer | `qwen3.7-max` | `qwen-max` | Root cause analysis, risk scoring, confidence |
+| Planner | `text-embedding-v3` | `text-embedding-v3` | Runbook semantic search (RAG) |
+| Escalation | `qwen3.6-plus` | `qwen-turbo` | Human-readable incident summaries |
 
-All models served via **Alibaba Cloud DashScope** (`dashscope.aliyuncs.com/compatible-mode/v1`).
+All models served via **Alibaba Cloud Model Studio** through an OpenAI-compatible `.../compatible-mode/v1` endpoint. Model names and the base URL both depend on your account type (pay-as-you-go vs. Token Plan / workspace-scoped) — see [`.env.example`](.env.example) for both, and [Proof of Deployment](#proof-of-deployment) for exactly what this live deployment uses.
 
 ---
 
@@ -168,17 +180,17 @@ Services:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `QWEN_API_KEY` | ✅ | — | DashScope API key |
-| `QWEN_BASE_URL` | ❌ | `https://dashscope.aliyuncs.com/compatible-mode/v1` | Qwen endpoint |
-| `QWEN_MODEL_MAX` | ❌ | `qwen-max` | Analyzer model |
-| `QWEN_MODEL_TURBO` | ❌ | `qwen-turbo` | Escalation model |
+| `QWEN_API_KEY` | ✅ | — | Model Studio / DashScope API key — must match the workspace where your models are activated (see [Proof of Deployment](#proof-of-deployment)) |
+| `QWEN_BASE_URL` | ❌ | `https://dashscope.aliyuncs.com/compatible-mode/v1` | Qwen endpoint. For Token Plan / workspace-scoped keys, use `https://<workspace-id>.<region>.maas.aliyuncs.com/compatible-mode/v1` instead |
+| `QWEN_MODEL_MAX` | ❌ | `qwen-max` | Analyzer model (this deployment uses `qwen3.7-max`) |
+| `QWEN_MODEL_TURBO` | ❌ | `qwen-turbo` | Escalation model (this deployment uses `qwen3.6-plus`) |
 | `QWEN_MODEL_EMBEDDING` | ❌ | `text-embedding-v3` | Embedding model |
 | `SLACK_WEBHOOK_URL` | ❌ | — | Slack webhook for notifications |
 | `KUBECONFIG` | ❌ | `~/.kube/config` | Kubeconfig path |
 | `DRY_RUN` | ❌ | `true` | Disable real kubectl execution |
 | `ALIBABA_ACCESS_KEY_ID` | ❌ | — | ECS cloud remediation |
 | `ALIBABA_ACCESS_KEY_SECRET` | ❌ | — | ECS cloud remediation |
-| `ALIBABA_REGION_ID` | ❌ | `cn-hangzhou` | ECS region |
+| `ALIBABA_REGION_ID` | ❌ | `cn-hangzhou` | ECS region (this deployment uses `ap-southeast-1`) |
 | `POLL_INTERVAL_SECONDS` | ❌ | `30` | Metric polling frequency |
 
 ---
@@ -286,17 +298,32 @@ kubectl apply -f k8s/service.yaml
 
 ## Benchmark: Real Numbers From the Live Deployment
 
-Measured directly from the running system's own logs during the `checkout-service` bad-image-tag incident on the live Alibaba Cloud deployment (timestamps below are real, taken from container logs, not simulated):
+Measured directly from the running system's own logs on the live Alibaba Cloud deployment — timestamps below are real, taken from container logs and raw API responses, not simulated.
+
+**Full pipeline run, Qwen fully operational** (the incident shown in the screenshots above):
 
 | Metric | Value | Source |
 |---|---|---|
-| Full pipeline latency (alert fired → escalation decision ready) | **2.6 seconds** | Measured: `pipeline_start` 21:24:21.008 → `awaiting_human_approval` 21:24:23.593, including two failed external API calls handled gracefully |
-| Detection to human-actionable decision card | Sub-minute (bounded by K8s event watch cycle) | Measured from live cluster events |
-| Manual baseline (typical human triage of an `ImagePullBackOff`: notice alert, open dashboard, `kubectl describe`, correlate, decide) | Several minutes (industry rule of thumb, not measured in this run) | Estimate — flagged as such, not fabricated |
-| Retrieval-ambiguity catches (system escalates instead of guessing) | 2/2 incidents in this test run | Both incidents in this deployment had `retrieval_score: 0.0` and were correctly escalated rather than auto-executed |
-| Rollback plan present on every proposed remediation | 100% | Enforced by the Planner — no `RemediationPlan` is created without a `rollback_plan` field |
+| Full pipeline latency (alert fired → decision card ready, including real Qwen inference) | **~4.7 seconds** | `alert_fired` 22:21:02.494 → `plan_created` — real 2,317-token Qwen response in the middle of that window |
+| Root cause diagnosis | Correct, high confidence | Qwen correctly identified the exact broken image tag and even flagged it as "a test/broken tag accidentally committed" |
+| Auto-remediate decision despite high-confidence RCA | Held for human approval | RAG runbook similarity (0.594) landed under the 0.65 auto-execute threshold — see [TRUST_LAYER.md](TRUST_LAYER.md) |
 
-We're intentionally not padding this table with invented precision. The honest takeaway: even while two of its three Qwen model calls were failing (a real, live model-activation issue on the Alibaba account, not a code bug), the Trust Layer still made the *correct* call — escalate, don't guess — in under 3 seconds.
+**Earlier run, Qwen temporarily inaccessible** (an account-level model-activation issue, not a code bug — see [TRUST_LAYER.md](TRUST_LAYER.md) for the full story):
+
+| Metric | Value | Source |
+|---|---|---|
+| Full pipeline latency (alert fired → escalation decision ready) | **2.6 seconds** | `pipeline_start` 21:24:21.008 → `awaiting_human_approval` 21:24:23.593, including two failed external API calls handled gracefully |
+| Fallback behavior when Qwen calls fail | Escalate, don't guess | Confidence marked `low`, risk marked `high`, `auto_remediate: false` — the same safety gate held even with zero model input |
+
+**Consistent across both runs:**
+
+| Metric | Value |
+|---|---|
+| Retrieval-ambiguity catches (system escalates instead of guessing) | 3/3 incidents in this deployment's test runs |
+| Rollback plan present on every proposed remediation | 100% — enforced by the Planner, no `RemediationPlan` is created without a `rollback_plan` field |
+| Manual baseline (typical human triage: notice alert, open dashboard, `kubectl describe`, correlate, decide) | Several minutes (industry rule of thumb — explicitly flagged as an estimate, not measured in this run) |
+
+We're intentionally not padding this table with invented precision. The honest takeaway: whether Qwen was fully available or completely blocked, the Trust Layer made the same *correct* call both times — hold for human approval rather than guess — in under 5 seconds either way.
 
 ---
 

@@ -1,0 +1,71 @@
+{
+    "incidents": [
+        {
+            "alert": {
+                "id": "fail-194d572b-e90a-4bda-a024-a992d8a97e81",
+                "timestamp": "2026-07-06T22:21:02.494316+00:00",
+                "severity": "warning",
+                "type": "deployment_failure",
+                "namespace": "checkout",
+                "resource": "checkout-service-559b664d97-9rjvc",
+                "message": "Resource failure: Failed to pull image \"nginx:BROKEN-221830\": rpc error: code = NotFound desc = failed to pull and unpack image \"docker.io/library/nginx:BROKEN-221830\": failed to resolve reference \"docker.io/library/nginx:BROKEN-221830\": docker.io/library/nginx:BROKEN-221830: not found",
+                "raw_data": {
+                    "reason": "Failed",
+                    "kind": "Pod"
+                }
+            },
+            "rca": {
+                "alert_id": "fail-194d572b-e90a-4bda-a024-a992d8a97e81",
+                "root_cause": "The deployment references a non-existent container image tag 'nginx:BROKEN-221830' which does not exist in the Docker Hub registry. The image pull fails with a 'not found' error, preventing the pod from starting. This is likely a misconfigured image tag introduced via a recent ArgoCD GitOps commit or Helm values update.",
+                "confidence": "high",
+                "recommended_action": "Rollback the checkout-service deployment to the last known good revision using ArgoCD, which will restore the previous valid image tag. Then investigate the Git commit that introduced the 'BROKEN-221830' tag and fix the image reference in the GitOps repository.",
+                "action_type": "rollback",
+                "risk_level": "low",
+                "auto_remediate": true,
+                "reasoning_trace": "1. The alert clearly indicates an image pull failure with 'not found' for tag 'nginx:BROKEN-221830'. 2. The tag name 'BROKEN-221830' is obviously not a valid nginx image tag \u2014 it appears to be a test/broken tag accidentally committed. 3. The pod cannot start without a valid image, so this is a deployment-blocking issue. 4. The safest and fastest remediation is to rollback to the previous known-good revision via ArgoCD, which will restore the working image tag. 5. Risk is low because rollback restores a previously working state. 6. Auto-remediation is safe here as it's a straightforward rollback with no data impact.",
+                "estimated_fix_time": "45 seconds"
+            },
+            "plan": {
+                "rca_alert_id": "fail-194d572b-e90a-4bda-a024-a992d8a97e81",
+                "runbook_name": "deployment-failure-force-sync",
+                "runbook_steps": [
+                    "Check ArgoCD app status: argocd app get <app-name> --insecure",
+                    "Review sync error details in ArgoCD UI or: argocd app get <app-name> -o json | jq .status.conditions",
+                    "Force hard refresh to pick up latest Git state: argocd app get --hard-refresh <app-name>",
+                    "Trigger force sync: argocd app sync <app-name> --force --insecure",
+                    "Monitor sync status: argocd app wait <app-name> --sync --insecure",
+                    "Verify all resources are healthy: argocd app get <app-name> | grep Health",
+                    "If sync fails, check for CRD issues or RBAC: kubectl describe events -n <namespace>"
+                ],
+                "requires_approval": true,
+                "approval_reason": "Runbook retrieval confidence is low \u2014 top match is ambiguous. A wrong runbook executed confidently is worse than no runbook.. Please approve or reject this remediation.",
+                "parameters": {
+                    "alert_id": "fail-194d572b-e90a-4bda-a024-a992d8a97e81",
+                    "action_type": "rollback",
+                    "runbook_params": [
+                        "argocd_app_name",
+                        "namespace"
+                    ]
+                },
+                "rollback_plan": "argocd app rollback <app-name> --insecure",
+                "estimated_duration": "60 seconds",
+                "retrieval_score": 0.5721,
+                "retrieval_margin": 0.0564,
+                "retrieval_escalated": true
+            },
+            "execution": null,
+            "status": "awaiting_approval",
+            "escalation": {
+                "alert_id": "fail-194d572b-e90a-4bda-a024-a992d8a97e81",
+                "severity": "warning",
+                "summary": "The `checkout-service` deployment is failing to start due to a `NotFound` error when pulling the non-existent image `nginx:BROKEN-221830` from Docker Hub. Execute the `deployment-failure-force-sync` runbook to immediately rollback the ArgoCD deployment to the last stable revision (~60s ETA, low risk). Post-recovery, audit the recent GitOps/Helm commit to correct the invalid image reference and prevent recurrence.",
+                "recommended_action": "Rollback the checkout-service deployment to the last known good revision using ArgoCD, which will restore the previous valid image tag. Then investigate the Git commit that introduced the 'BROKEN-221830' tag and fix the image reference in the GitOps repository.",
+                "requires_approval": true,
+                "approval_token": "174c35ec2189",
+                "notified_at": "2026-07-06T22:21:58.032572+00:00",
+                "channel": "slack"
+            }
+        }
+    ],
+    "total": 1
+}
