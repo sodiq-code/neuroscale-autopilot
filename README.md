@@ -26,7 +26,7 @@ This project is deployed and running **right now** on a real Alibaba Cloud ECS i
 | Kubernetes | k3s v1.36.2+k3s1 (real control plane, real pods, real events) |
 | Qwen base URL | `https://dashscope.aliyuncs.com/compatible-mode/v1` (see [`agents/analyzer`](agents/analyzer)) |
 | Target workload | `checkout-service` deployment (3 replicas) in the `checkout` namespace |
-| Proof | See `docs/screenshots-real/` for unedited screenshots of the live dashboard reacting to a real injected incident |
+| Proof | See [Dashboard Screenshots](#dashboard-screenshots) below, or `docs/screenshots/` directly, for unedited screenshots of the live dashboard reacting to a real injected incident |
 
 See the [Alibaba Cloud Deployment](#alibaba-cloud-deployment) section below for the exact steps used, and [TRUST_LAYER.md](TRUST_LAYER.md) for a real captured incident from this exact deployment.
 
@@ -96,18 +96,19 @@ Metrics → Detect → Analyze (Qwen-Max) → Plan (Qwen-Embedding RAG) → Exec
 
 ## Dashboard Screenshots
 
-> Unedited screenshots captured directly from the live Alibaba Cloud deployment (`http://<instance-ip>:3000`) while a real incident was running on a real k3s cluster. No mocked data, no image editing.
+> Every screenshot below is an unedited capture from the live Alibaba Cloud deployment (`http://<instance-public-ip>:3000`), taken while a real bad-image-tag incident was running against a real k3s cluster on real ECS infrastructure — no mocked data, no staged UI, no image editing. The old placeholder/simulated screenshots have been removed from this repo entirely.
 
-**Monitoring Overview — Live incident from the real cluster, "Live" websocket status**
-![Dashboard Overview](docs/screenshots-real/dashboard-overview.png)
+### 1. Live monitoring overview
+![Dashboard Overview](docs/screenshots/dashboard-overview.png)
+The dashboard connected via WebSocket ("Live" status, top right) to the real backend running on Alibaba Cloud ECS. The incident log shows the `checkout-service` deployment failure the moment it was detected from the real k3s cluster's event stream — no polling delay beyond the detector's own watch cycle.
 
-**Hero Incident — Bad image tag injected into `checkout-service`, detected in real time**
-![Checkout Incident](docs/screenshots-real/checkout-incident-detected.png)
+### 2. The hero incident: a bad image tag hits `checkout-service`
+![Checkout Incident](docs/screenshots/checkout-incident-detected.png)
+A real `nginx:1.25-alpine-BADTAG-vBROKEN` image tag was rolled out to the live cluster. NeuroScale's Detector picked up the resulting `ImagePullBackOff` from real Kubernetes events within one watch cycle and opened an incident automatically — status: **AWAITING APPROVAL**.
 
-**Trust Layer Decision Card — Real Qwen root cause analysis, confidence/risk scoring, remediation plan, rollback command, human approval gate**
-![Trust Layer Decision Card](docs/screenshots-real/trust-layer-decision-card.png)
-
-> Captured live: Qwen correctly diagnosed a non-existent container image tag as the root cause with `high` confidence and `low` risk, but the runbook retrieval similarity (0.59) came in just under the 0.65 auto-execute threshold — so the system correctly held for human approval instead of guessing. Full breakdown in [TRUST_LAYER.md](TRUST_LAYER.md).
+### 3. The Trust Layer decision card
+![Trust Layer Decision Card](docs/screenshots/trust-layer-decision-card.png)
+This is the entire thesis of the project, rendered live: Qwen-Max correctly diagnosed the root cause with **high confidence** and **low risk**, and proposed a rollback with an exact `kubectl rollout undo` command. But the RAG runbook retrieval score (0.59) landed just under the 0.65 auto-execute threshold — so instead of guessing, the system held for human **Approve / Reject**. A confident diagnosis was not enough on its own to earn autonomous execution. Full breakdown of how this scoring works: [TRUST_LAYER.md](TRUST_LAYER.md).
 
 ---
 
