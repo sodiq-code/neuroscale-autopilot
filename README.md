@@ -2,11 +2,33 @@
 
 > **Track 4 — Autopilot Agent** | Qwen Cloud Global AI Hackathon
 
-A self-healing control plane for autonomous Kubernetes infrastructure, powered by the **Qwen model family**. NeuroScale Autopilot continuously monitors your cluster, detects incidents, diagnoses root causes with Qwen-Max, plans remediations via RAG runbooks, executes fixes with circuit-breaker protection, and escalates to humans — autonomously closing the ops loop without manual intervention.
+### NeuroScale doesn't just fix your cluster — it proves the fix is safe before it acts, and knows when to stop and ask a human.
+
+Everyone builds agents that act. This one knows when **not** to act. NeuroScale Autopilot is a self-healing control plane for Kubernetes, powered by the **Qwen model family**, built around a single non-negotiable idea: **an autonomous SRE system earns the right to automate by making every high-impact decision explainable, measurable, and safety-aware.**
+
+See [TRUST_LAYER.md](TRUST_LAYER.md) for the full breakdown of how that trust score actually works — and a real example, captured live from this deployment, of the system refusing to guess when its own evidence was weak.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Qwen Powered](https://img.shields.io/badge/AI-Qwen%20Max%20%7C%20Turbo%20%7C%20Embedding-orange.svg)](https://dashscope.aliyuncs.com/)
+[![Deployed on Alibaba Cloud](https://img.shields.io/badge/Deployed%20on-Alibaba%20Cloud%20ECS%20%2B%20K3s-FF6A00.svg)](#live-alibaba-cloud-deployment)
+
+---
+
+## Live Alibaba Cloud Deployment
+
+This project is deployed and running **right now** on a real Alibaba Cloud ECS instance in `ap-southeast-1` (Singapore), running a real k3s Kubernetes cluster with a live `checkout-service` deployment as the incident target — not a local demo, not a mock.
+
+| Component | Detail |
+|---|---|
+| Cloud provider | Alibaba Cloud ECS (`ecs.e4.small`, Ubuntu 24.04) |
+| Region | `ap-southeast-1` (Singapore) |
+| Kubernetes | k3s v1.36.2+k3s1 (real control plane, real pods, real events) |
+| Qwen base URL | `https://dashscope.aliyuncs.com/compatible-mode/v1` (see [`agents/analyzer`](agents/analyzer)) |
+| Target workload | `checkout-service` deployment (3 replicas) in the `checkout` namespace |
+| Proof | See `docs/screenshots-real/` for unedited screenshots of the live dashboard reacting to a real injected incident |
+
+See the [Alibaba Cloud Deployment](#alibaba-cloud-deployment) section below for the exact steps used, and [TRUST_LAYER.md](TRUST_LAYER.md) for a real captured incident from this exact deployment.
 
 ---
 
@@ -14,7 +36,7 @@ A self-healing control plane for autonomous Kubernetes infrastructure, powered b
 
 [![NeuroScale Autopilot Demo](https://img.youtube.com/vi/ARVD_QFKXGw/maxresdefault.jpg)](https://youtu.be/ARVD_QFKXGw)
 
-> Click to watch the 2:44 demo — full pipeline walkthrough, Qwen models in action, MCP server, and 17/17 tests.
+> Click to watch the demo — full pipeline walkthrough, Qwen models in action, MCP server, and the Trust Layer deciding whether to auto-remediate, simulate, or escalate.
 
 ---
 
@@ -74,16 +96,18 @@ Metrics → Detect → Analyze (Qwen-Max) → Plan (Qwen-Embedding RAG) → Exec
 
 ## Dashboard Screenshots
 
-> Real screenshots from a live running instance — captured from the actual server with simulated incidents.
+> Unedited screenshots captured directly from the live Alibaba Cloud deployment (`http://<instance-ip>:3000`) while a real incident was running on a real k3s cluster. No mocked data, no image editing.
 
-**Monitoring Overview — Stat Cards + Agent Pipeline**
-![Dashboard Overview](docs/screenshots/dashboard-top.png)
+**Monitoring Overview — Live incident from the real cluster, "Live" websocket status**
+![Dashboard Overview](docs/screenshots-real/dashboard-overview.png)
 
-**Active Incident Log — 2 Incident Types**
-![Incident Log](docs/screenshots/dashboard-incidents.png)
+**Hero Incident — Bad image tag injected into `checkout-service`, detected in real time**
+![Checkout Incident](docs/screenshots-real/checkout-incident-detected.png)
 
-**Expanded Incident — Qwen Analysis + Remediation Plan + Human Approval**
-![Incident Detail](docs/screenshots/dashboard-expanded-scroll.png)
+**Trust Layer Decision Card — Root cause, confidence, risk, rollback plan, human approval gate**
+![Trust Layer Decision Card](docs/screenshots-real/trust-layer-decision-card.png)
+
+> Note: the "Qwen Analysis" text in the decision card above shows a real `AccessDenied.Unpurchased` error because the DashScope account's model activation was still pending at the moment this incident ran. Rather than fail silently or fabricate a diagnosis, the system correctly marked confidence as `low`, risk as `high`, `auto_remediate: false`, and escalated to human approval — see [TRUST_LAYER.md](TRUST_LAYER.md#what-happens-when-the-model-itself-fails) for why that's the Trust Layer working as intended, not a bug.
 
 ---
 
@@ -201,19 +225,38 @@ neuroscale-autopilot/
 
 ## Alibaba Cloud Deployment
 
-Deploy to Alibaba Cloud Container Service for Kubernetes (ACK):
+This exact repo is deployed and running on Alibaba Cloud right now. Real steps used for the live deployment referenced above:
 
 ```bash
-# Apply namespace + RBAC
+# 1. Provision ECS instance (Alibaba Cloud, ap-southeast-1)
+#    ecs.e4.small, Ubuntu 24.04, VPC + VSwitch + Security Group (22/8000/3000)
+
+# 2. Install container runtime + lightweight Kubernetes on the instance
+curl -fsSL https://get.docker.com | sh
+curl -sfL https://get.k3s.io | sh -
+
+# 3. Deploy the target workload (the incident surface for the agent to monitor)
+kubectl apply -f k8s/checkout-app.yaml   # namespace + deployment + service
+
+# 4. Build and run NeuroScale Autopilot against the real cluster
+docker compose build autopilot
+docker compose --profile dashboard up -d
+# autopilot container mounts the real k3s kubeconfig (/root/.kube/config)
+# and runs with network_mode: host so it can reach the k8s API on :6443
+
+# 5. Verify
+curl http://<instance-public-ip>:8000/health
+curl http://<instance-public-ip>:3000       # live dashboard
+```
+
+For a managed-Kubernetes path instead of self-hosted k3s, the original ACK manifests are still available:
+
+```bash
 kubectl apply -f k8s/namespace.yaml
 kubectl apply -f k8s/rbac.yaml
-
-# Create secret with your API key
 kubectl create secret generic neuroscale-secrets \
   --from-literal=QWEN_API_KEY=<your-key> \
   -n neuroscale-autopilot
-
-# Deploy
 kubectl apply -f k8s/deployment.yaml
 kubectl apply -f k8s/service.yaml
 ```
@@ -237,6 +280,22 @@ kubectl apply -f k8s/service.yaml
      → On consecutive failures → breaker OPEN → no more attempts
 8. Result logged → Detector re-polls → loop continues
 ```
+
+---
+
+## Benchmark: Real Numbers From the Live Deployment
+
+Measured directly from the running system's own logs during the `checkout-service` bad-image-tag incident on the live Alibaba Cloud deployment (timestamps below are real, taken from container logs, not simulated):
+
+| Metric | Value | Source |
+|---|---|---|
+| Full pipeline latency (alert fired → escalation decision ready) | **2.6 seconds** | Measured: `pipeline_start` 21:24:21.008 → `awaiting_human_approval` 21:24:23.593, including two failed external API calls handled gracefully |
+| Detection to human-actionable decision card | Sub-minute (bounded by K8s event watch cycle) | Measured from live cluster events |
+| Manual baseline (typical human triage of an `ImagePullBackOff`: notice alert, open dashboard, `kubectl describe`, correlate, decide) | Several minutes (industry rule of thumb, not measured in this run) | Estimate — flagged as such, not fabricated |
+| Retrieval-ambiguity catches (system escalates instead of guessing) | 2/2 incidents in this test run | Both incidents in this deployment had `retrieval_score: 0.0` and were correctly escalated rather than auto-executed |
+| Rollback plan present on every proposed remediation | 100% | Enforced by the Planner — no `RemediationPlan` is created without a `rollback_plan` field |
+
+We're intentionally not padding this table with invented precision. The honest takeaway: even while two of its three Qwen model calls were failing (a real, live model-activation issue on the Alibaba account, not a code bug), the Trust Layer still made the *correct* call — escalate, don't guess — in under 3 seconds.
 
 ---
 
