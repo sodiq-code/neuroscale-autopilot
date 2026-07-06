@@ -8,7 +8,9 @@ Everyone builds agents that act. This one knows when **not** to act. NeuroScale 
 
 See [TRUST_LAYER.md](TRUST_LAYER.md) for the full breakdown of how that trust score actually works — and a real example, captured live from this deployment, of the system refusing to guess when its own evidence was weak.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+**🔗 Live Dashboard:** [http://43.98.177.117:3000](http://43.98.177.117:3000) — running right now on Alibaba Cloud, see [Proof of Deployment](#proof-of-deployment) below.
+
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Qwen Powered](https://img.shields.io/badge/AI-Qwen%20Max%20%7C%20Turbo%20%7C%20Embedding-orange.svg)](https://dashscope.aliyuncs.com/)
 [![Deployed on Alibaba Cloud](https://img.shields.io/badge/Deployed%20on-Alibaba%20Cloud%20ECS%20%2B%20K3s-FF6A00.svg)](#live-alibaba-cloud-deployment)
@@ -27,6 +29,7 @@ This project is deployed and running **right now** on a real Alibaba Cloud ECS i
 | Qwen base URL | Workspace-specific Model Studio endpoint, `.../compatible-mode/v1` — see [`agents/analyzer`](agents/analyzer) and the Environment Variables table below |
 | Models | `qwen3.7-max` (RCA), `qwen3.6-plus` (escalation summaries), `text-embedding-v3` (RAG retrieval) |
 | Target workload | `checkout-service` deployment (3 replicas) in the `checkout` namespace |
+| Live dashboard | [http://43.98.177.117:3000](http://43.98.177.117:3000) — open it right now |
 | Proof | [Dashboard Screenshots](#dashboard-screenshots) below (live, unedited) + [Proof of Deployment](#proof-of-deployment) (Alibaba Cloud console + raw live API response) |
 
 See the [Alibaba Cloud Deployment](#alibaba-cloud-deployment) section below for the exact steps used, and [TRUST_LAYER.md](TRUST_LAYER.md) for a real captured incident from this exact deployment.
@@ -335,7 +338,7 @@ We're intentionally not padding this table with invented precision. The honest t
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
+Apache License 2.0 — see [LICENSE](LICENSE)
 
 ---
 

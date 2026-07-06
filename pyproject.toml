@@ -7,7 +7,7 @@ name = "neuroscale-autopilot"
 version = "1.0.0"
 description = "Self-healing Kubernetes infrastructure agent powered by Qwen AI"
 authors = [{name = "Sodiq Jimoh", email = "sodiqjimoh80@gmail.com"}]
-license = {text = "MIT"}
+license = {text = "Apache-2.0"}
 requires-python = ">=3.11"
 readme = "README.md"
 
