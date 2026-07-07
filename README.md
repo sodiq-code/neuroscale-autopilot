@@ -352,7 +352,7 @@ Apache License 2.0 — see [LICENSE](LICENSE)
 
 ## Author
 
-**Sodiq Jimoh** — Platform Engineer  
+**Sodiq Jimoh** - Platform Engineer (Kubernetes & SRE)
 [LinkedIn](https://linkedin.com/in/sodiq-jimoh-afsod)
 
 Built for the **Qwen Cloud Global AI Hackathon — Track 4: Autopilot Agent**
