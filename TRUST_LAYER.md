@@ -74,6 +74,16 @@ That is the Trust Layer holding up under a real degraded-dependency scenario —
 
 Every remediation plan the Planner produces carries an explicit `rollback_plan` field. No plan is proposed — automatically or for approval — without a documented way back. For Kubernetes-native actions this is typically a one-line `kubectl rollout undo`, but the point isn't the specific command: it's that **the system never proposes a one-way door.**
 
+## What's Next: Persistent Judgment, Not Just Runtime Judgment
+
+Everything above describes judgment at the moment of a single incident: the gate checks confidence, retrieval score, and risk, and decides fresh, every time. That's the right foundation, but it has a natural next step that makes the whole system compound in value instead of resetting to zero on every run.
+
+Right now, when a human approves or rejects a proposed remediation, that verdict lives in the incident history, visible on the dashboard, but it isn't yet read back by the Analyzer or Planner the next time a near-identical incident occurs. The next incident re-runs the same gate cold, with no memory that a person already made a call on this exact situation.
+
+The next milestone closes that loop: feeding approved and rejected verdicts back into the Planner's retrieval index as a first-class signal, alongside the existing similarity score, so a runbook that a human has previously approved for a given incident type carries more weight, and one a human has explicitly rejected is down-weighted or flagged for review rather than resurfacing with the same confidence as before. In effect, restraint and approval both accumulate across incidents instead of evaporating after each one.
+
+This is judgment that persists, not just judgment that runs. A Trust Layer that gets a little sharper every time a human weighs in is a stronger safety guarantee than one that starts from the same blank slate on every incident, no matter how many times it's been right before.
+
 ## Summary
 
 | Question a judge might ask | Answer |

@@ -347,6 +347,12 @@ We're intentionally not padding this table with invented precision. The honest t
 
 ---
 
+## Roadmap: Persistent Judgment, Not Just Runtime Judgment
+
+The Trust Layer today makes a fresh, correct decision on every incident. The next milestone makes that judgment compound over time instead of resetting to zero each run: feeding approved and rejected human verdicts back into the Planner's retrieval index, so a runbook a human has previously approved carries more weight next time, and one a human has rejected is down-weighted rather than resurfacing with the same confidence as before. Full detail in [TRUST_LAYER.md](TRUST_LAYER.md#whats-next-persistent-judgment-not-just-runtime-judgment).
+
+---
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE)
