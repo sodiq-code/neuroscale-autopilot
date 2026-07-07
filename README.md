@@ -214,18 +214,18 @@ Services:
 
 ## MCP Server Tools
 
-The MCP server exposes 8 tools for external AI clients:
+The MCP server exposes 8 tools for external AI clients (see [`mcp_server/server.py`](mcp_server/server.py) for the exact schemas):
 
 | Tool | Description |
 |------|-------------|
-| `get_cluster_status` | Current health summary of the cluster |
-| `list_active_alerts` | All active alerts with severity + age |
-| `get_alert_detail` | Full detail for a specific alert |
-| `trigger_remediation` | Manually trigger remediation for an alert |
-| `get_remediation_status` | Status of a running remediation job |
-| `approve_action` | Human approval for pending high-risk actions |
-| `get_runbook` | Retrieve runbook content by name |
-| `get_metrics_summary` | Raw metric summary for a namespace |
+| `get_pod_status` | Current status of pods in a namespace |
+| `get_pod_logs` | Recent logs from a container in a pod |
+| `get_deployment_status` | Deployment rollout status and replica counts |
+| `execute_rollback` | Roll back a deployment to the previous stable version via ArgoCD or kubectl |
+| `patch_deployment_resources` | Update container resource limits/requests for a deployment |
+| `get_cost_report` | OpenCost budget and spend report for a namespace |
+| `create_policy_exception` | Create a Kyverno PolicyException for an approved workload |
+| `scale_workload` | Scale a deployment or KServe InferenceService to a target replica count |
 
 ---
 
@@ -279,17 +279,20 @@ curl http://<instance-public-ip>:8000/health
 curl http://<instance-public-ip>:3000       # live dashboard
 ```
 
-For a managed-Kubernetes path instead of self-hosted k3s, the original ACK manifests are still available:
+For a managed-Kubernetes path instead of self-hosted k3s (e.g. Alibaba Cloud Container Service for Kubernetes / ACK), a single consolidated manifest is provided:
 
 ```bash
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/rbac.yaml
-kubectl create secret generic neuroscale-secrets \
+# Set your real Qwen API key first
+kubectl create secret generic autopilot-secrets \
   --from-literal=QWEN_API_KEY=<your-key> \
-  -n neuroscale-autopilot
-kubectl apply -f k8s/deployment.yaml
-kubectl apply -f k8s/service.yaml
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# Namespace, ConfigMap, Deployment, Service, ServiceAccount, and RBAC
+# are all defined in this one file:
+kubectl apply -f k8s/manifests/autopilot-deployment.yaml
 ```
+
+Optional Kyverno governance policies (image tag immutability, non-root containers, resource limits) are also available under [`k8s/manifests/`](k8s/manifests/) if your cluster runs Kyverno — they are not required for the core pipeline to function and were not applied to the live deployment referenced throughout this README.
 
 ---
 
