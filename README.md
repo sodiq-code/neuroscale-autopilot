@@ -4,7 +4,7 @@
 
 ### NeuroScale doesn't just fix your cluster — it proves the fix is safe before it acts, and knows when to stop and ask a human.
 
-Everyone builds agents that act. This one knows when **not** to act. NeuroScale Autopilot is a self-healing control plane for Kubernetes, powered by the **Qwen model family**, built around a single non-negotiable idea: **an autonomous SRE system earns the right to automate by making every high-impact decision explainable, measurable, and safety-aware.**
+Most autonomous agents are built to act as fast as possible. NeuroScale Autopilot is built to act only when it's safe to. It is a self-healing control plane for Kubernetes, powered by the **Qwen model family**, built around a single non-negotiable idea: **an autonomous SRE system earns the right to automate by making every high-impact decision explainable, measurable, and safety-aware.**
 
 See [TRUST_LAYER.md](TRUST_LAYER.md) for the full breakdown of how that trust score actually works — and a real example, captured live from this deployment, of the system refusing to guess when its own evidence was weak.
 
