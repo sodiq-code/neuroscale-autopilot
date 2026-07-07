@@ -105,6 +105,38 @@ async def test_emit_alert_dedup_distinguishes_different_resources():
     assert detector.on_alert.await_count == 2
 
 
+def test_watch_loops_are_synchronous_not_async():
+    """Regression guard: the Kubernetes watch/list loops must be plain
+    synchronous functions run via asyncio.to_thread, never `async def`
+    functions calling the (blocking) kubernetes client directly.
+
+    Calling the synchronous kubernetes client directly inside an `async def`
+    freezes the entire event loop for the duration of each blocking network
+    read — including all FastAPI request handling. This caused a real
+    production incident where the live deployment became unresponsive to
+    external requests for extended periods. See PROOF_OF_DEPLOYMENT.md.
+    """
+    import inspect
+    from agents.detector.detector import DetectorAgent
+
+    for method_name in ("_watch_pod_events_sync", "_watch_oomkills_sync", "_watch_crashloops_sync"):
+        method = getattr(DetectorAgent, method_name)
+        assert not inspect.iscoroutinefunction(method), (
+            f"{method_name} must be a plain sync function run via asyncio.to_thread, "
+            f"not an async function calling the blocking kubernetes client directly"
+        )
+
+
+def test_detector_start_uses_to_thread_for_watch_loops():
+    """start() must offload the blocking watch loops via asyncio.to_thread
+    rather than awaiting them directly on the event loop."""
+    import inspect
+    from agents.detector.detector import DetectorAgent
+
+    source = inspect.getsource(DetectorAgent.start)
+    assert "asyncio.to_thread" in source
+
+
 # ─── Analyzer Tests ────────────────────────────────────────────────────────────
 
 def test_analyzer_imports():

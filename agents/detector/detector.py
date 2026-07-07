@@ -2,6 +2,18 @@
 Detector Agent — Continuously monitors Kubernetes cluster for anomalies.
 Watches: Pod health, OOMKills, CrashLoops, Kyverno policy violations, OpenCost budget alerts.
 Fires structured alerts to the Analyzer Agent.
+
+IMPORTANT: The official Kubernetes Python client is synchronous (blocking) —
+it is not asyncio-native. Every watch/list call below therefore runs inside
+a dedicated worker thread via asyncio.to_thread, never directly on the main
+event loop. Calling these blocking calls directly from an `async def`
+function (as an earlier version of this file did) would periodically freeze
+the entire event loop — including all FastAPI request handling — for as
+long as each blocking network read takes. That caused a real production
+incident during testing: the API became unresponsive to external requests
+for extended periods while still answering some localhost health checks
+that happened to slip in between blocking reads. See PROOF_OF_DEPLOYMENT.md
+for the full incident writeup.
 """
 
 import asyncio
@@ -36,7 +48,8 @@ class Alert(BaseModel):
 class DetectorAgent:
     """
     Continuously monitors the K8s cluster and emits structured alerts.
-    Runs as an async background task.
+    Runs as background threads (offloaded from the asyncio event loop —
+    see module docstring for why this matters).
     """
 
     def __init__(self, on_alert: Callable[[Alert], None], kubeconfig: Optional[str] = None):
@@ -44,6 +57,7 @@ class DetectorAgent:
         self.kubeconfig = kubeconfig
         self._running = False
         self._tasks = []
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         # Tracks the last-seen Kubernetes event resourceVersion so that when
         # the events watch reconnects (on its 60s timeout or after a
         # transient error) it resumes from where it left off instead of
@@ -71,28 +85,56 @@ class DetectorAgent:
         self.apps_v1 = client.AppsV1Api()
 
     async def start(self):
-        """Start all monitoring tasks."""
+        """Start all monitoring loops, each offloaded to its own thread."""
         self._running = True
+        self._loop = asyncio.get_running_loop()
         logger.info("detector_agent_started")
 
         self._tasks = [
-            asyncio.create_task(self._watch_pod_events()),
-            asyncio.create_task(self._watch_oomkills()),
-            asyncio.create_task(self._watch_crashloops()),
+            asyncio.create_task(asyncio.to_thread(self._watch_pod_events_sync)),
+            asyncio.create_task(asyncio.to_thread(self._watch_oomkills_sync)),
+            asyncio.create_task(asyncio.to_thread(self._watch_crashloops_sync)),
         ]
 
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
     async def stop(self):
-        """Stop all monitoring tasks."""
+        """Stop all monitoring loops.
+
+        Threads observe self._running and exit on their next loop check or
+        sleep interval; an in-flight blocking watch read may take up to its
+        own timeout to unwind, which is acceptable for shutdown.
+        """
         self._running = False
         for task in self._tasks:
             task.cancel()
         logger.info("detector_agent_stopped")
 
-    async def _watch_pod_events(self):
+    def _emit_alert_from_thread(self, alert: Alert, dedup_key: Optional[str] = None):
+        """Safely hand an alert from a worker thread back to the main event loop.
+
+        _emit_alert is async (it may call an async on_alert handler), but
+        these watch loops run in plain OS threads, not on the event loop.
+        asyncio.run_coroutine_threadsafe schedules the coroutine onto the
+        main loop and .result() blocks this worker thread until it
+        completes, which is safe and correct here since we are not blocking
+        the event loop itself, only this dedicated worker thread.
+        """
+        if self._loop is None:
+            logger.error("emit_alert_no_loop_registered")
+            return
+        future = asyncio.run_coroutine_threadsafe(
+            self._emit_alert(alert, dedup_key=dedup_key), self._loop
+        )
+        try:
+            future.result()
+        except Exception as e:
+            logger.error("emit_alert_threadsafe_error", error=str(e))
+
+    def _watch_pod_events_sync(self):
         """Watch for pod-level warning events (OOMKill, BackOff, Failed).
 
+        Runs in a dedicated worker thread (see class/module docstring).
         Resumes from the last-seen resourceVersion on reconnect instead of
         re-listing from scratch, so a 60s timeout or transient error doesn't
         cause recently-handled events to be replayed and re-processed as if
@@ -112,6 +154,9 @@ class DetectorAgent:
                     self.core_v1.list_event_for_all_namespaces,
                     **stream_kwargs
                 ):
+                    if not self._running:
+                        break
+
                     obj = event["object"]
                     if obj.metadata and obj.metadata.resource_version:
                         self._events_resource_version = obj.metadata.resource_version
@@ -123,7 +168,7 @@ class DetectorAgent:
                     resource_name = involved.name or "unknown"
 
                     if reason in ("OOMKilling", "OOMKilled"):
-                        await self._emit_alert(Alert(
+                        self._emit_alert_from_thread(Alert(
                             id=f"oom-{obj.metadata.uid or datetime.now().timestamp()}",
                             timestamp=datetime.now(timezone.utc).isoformat(),
                             severity="critical",
@@ -139,7 +184,7 @@ class DetectorAgent:
                         ), dedup_key=f"oomkill:{namespace}:{resource_name}")
 
                     elif reason in ("BackOff", "CrashLoopBackOff"):
-                        await self._emit_alert(Alert(
+                        self._emit_alert_from_thread(Alert(
                             id=f"crash-{obj.metadata.uid or datetime.now().timestamp()}",
                             timestamp=datetime.now(timezone.utc).isoformat(),
                             severity="critical",
@@ -155,7 +200,7 @@ class DetectorAgent:
                         ), dedup_key=f"crashloop:{namespace}:{resource_name}")
 
                     elif reason in ("Failed", "FailedCreate", "FailedScheduling"):
-                        await self._emit_alert(Alert(
+                        self._emit_alert_from_thread(Alert(
                             id=f"fail-{obj.metadata.uid or datetime.now().timestamp()}",
                             timestamp=datetime.now(timezone.utc).isoformat(),
                             severity="warning",
@@ -166,10 +211,6 @@ class DetectorAgent:
                             raw_data={"reason": reason, "kind": involved.kind}
                         ), dedup_key=f"deployment_failure:{namespace}:{resource_name}")
 
-                    await asyncio.sleep(0)
-
-            except asyncio.CancelledError:
-                break
             except Exception as e:
                 # A stale/expired resourceVersion (410 Gone) means Kubernetes
                 # has compacted past it — fall back to a fresh list on the
@@ -178,10 +219,10 @@ class DetectorAgent:
                     logger.warning("events_resource_version_expired_resetting")
                     self._events_resource_version = None
                 logger.error("pod_events_watch_error", error=str(e))
-                await asyncio.sleep(5)
+                time.sleep(5)
 
-    async def _watch_oomkills(self):
-        """Scan all pods for OOMKilled container states."""
+    def _watch_oomkills_sync(self):
+        """Scan all pods for OOMKilled container states. Runs in a worker thread."""
         while self._running:
             try:
                 pods = self.core_v1.list_pod_for_all_namespaces(watch=False)
@@ -190,7 +231,7 @@ class DetectorAgent:
                         if cs.last_state and cs.last_state.terminated:
                             term = cs.last_state.terminated
                             if term.reason == "OOMKilled":
-                                await self._emit_alert(Alert(
+                                self._emit_alert_from_thread(Alert(
                                     id=f"oom-scan-{pod.metadata.uid}-{cs.name}",
                                     timestamp=datetime.now(timezone.utc).isoformat(),
                                     severity="critical",
@@ -205,15 +246,16 @@ class DetectorAgent:
                                         "finished_at": str(term.finished_at),
                                     }
                                 ), dedup_key=f"oomkill:{pod.metadata.namespace}:{pod.metadata.name}:{cs.name}")
-            except asyncio.CancelledError:
-                break
             except Exception as e:
                 logger.error("oomkill_scan_error", error=str(e))
 
-            await asyncio.sleep(30)
+            for _ in range(30):
+                if not self._running:
+                    return
+                time.sleep(1)
 
-    async def _watch_crashloops(self):
-        """Scan for CrashLoopBackOff pods."""
+    def _watch_crashloops_sync(self):
+        """Scan for CrashLoopBackOff pods. Runs in a worker thread."""
         while self._running:
             try:
                 pods = self.core_v1.list_pod_for_all_namespaces(
@@ -223,7 +265,7 @@ class DetectorAgent:
                     for cs in (pod.status.container_statuses or []):
                         if cs.state and cs.state.waiting:
                             if cs.state.waiting.reason == "CrashLoopBackOff":
-                                await self._emit_alert(Alert(
+                                self._emit_alert_from_thread(Alert(
                                     id=f"crash-scan-{pod.metadata.uid}-{cs.name}",
                                     timestamp=datetime.now(timezone.utc).isoformat(),
                                     severity="critical",
@@ -237,12 +279,13 @@ class DetectorAgent:
                                         "waiting_reason": cs.state.waiting.reason,
                                     }
                                 ), dedup_key=f"crashloop-scan:{pod.metadata.namespace}:{pod.metadata.name}:{cs.name}")
-            except asyncio.CancelledError:
-                break
             except Exception as e:
                 logger.error("crashloop_scan_error", error=str(e))
 
-            await asyncio.sleep(20)
+            for _ in range(20):
+                if not self._running:
+                    return
+                time.sleep(1)
 
     async def _emit_alert(self, alert: Alert, dedup_key: Optional[str] = None):
         """Fire alert to handler.
