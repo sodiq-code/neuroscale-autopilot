@@ -8,6 +8,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - ENVIRONMENT=${ENVIRONMENT:-production}
       - QWEN_API_KEY=${QWEN_API_KEY}
       - QWEN_BASE_URL=${QWEN_BASE_URL:-https://dashscope-intl.aliyuncs.com/compatible-mode/v1}
       - QWEN_MODEL_MAX=${QWEN_MODEL_MAX:-qwen-max}
