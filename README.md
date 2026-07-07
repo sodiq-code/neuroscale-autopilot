@@ -38,9 +38,9 @@ See the [Alibaba Cloud Deployment](#alibaba-cloud-deployment) section below for 
 
 ## Demo Video
 
-[![NeuroScale Autopilot Demo](https://img.youtube.com/vi/ARVD_QFKXGw/maxresdefault.jpg)](https://youtu.be/ARVD_QFKXGw)
+[![NeuroScale Autopilot Demo](https://img.youtube.com/vi/Bdua2ZcO36M/maxresdefault.jpg)](https://youtu.be/Bdua2ZcO36M)
 
-> Click to watch the demo — full pipeline walkthrough, Qwen models in action, MCP server, and the Trust Layer deciding whether to auto-remediate, simulate, or escalate.
+> Click to watch — real incident detected live on the Alibaba Cloud deployment, real Qwen root cause analysis, the Trust Layer holding for human approval despite a confident diagnosis, resolution, and real impact numbers. No staged footage.
 
 ---
 
@@ -66,33 +66,41 @@ Metrics → Detect → Analyze (Qwen-Max) → Plan (Qwen-Embedding RAG) → Exec
 
 ## Architecture
 
-![NeuroScale Autopilot Architecture](docs/assets/architecture-diagram.png)
+![NeuroScale Autopilot Architecture](docs/assets/architecture-diagram-v2.png)
 
-> Full pipeline: Kubernetes/Kyverno/OpenCost events → 5 autonomous agents → MCP Server → Alibaba Cloud ECS. Orchestrator handles alert deduplication and human-approval timeout (300s).
+> Full pipeline: Kubernetes/Kyverno/OpenCost events → 3 reasoning agents → **Trust Layer Gate** (the actual safety checkpoint, not just a marketing phrase) → auto-execute or human approval → MCP Server → Alibaba Cloud ECS. The gate checks the same three real signals visible in every dashboard decision card: analyzer confidence, RAG runbook retrieval score (≥0.65 to auto-execute), and risk level — if any one fails, the system escalates instead of guessing. Orchestrator handles alert deduplication and human-approval timeout (300s).
 
 <details>
 <summary>ASCII fallback</summary>
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                    NeuroScale Autopilot                      │
-│                                                              │
-│  ┌─────────┐   ┌──────────────┐   ┌──────────────────────┐  │
-│  │Detector │──▶│Analyzer      │──▶│Planner               │  │
-│  │         │   │Qwen-Max LLM  │   │Qwen-Embedding + RAG  │  │
-│  │Prometheus│   │RCA + Scoring │   │Runbook Retrieval     │  │
-│  └─────────┘   └──────────────┘   └──────────┬───────────┘  │
-│                                               │              │
-│  ┌─────────────────────────┐   ┌─────────────▼───────────┐  │
-│  │Escalation Agent         │◀──│Executor                 │  │
-│  │Qwen-Turbo Summary       │   │kubectl + Circuit Breaker│  │
-│  │Slack + Approval Flow    │   │Alibaba Cloud ECS        │  │
-│  └─────────────────────────┘   └─────────────────────────┘  │
-│                                                              │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │MCP Server (8 tools) — FastAPI REST + SSE                │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                       NeuroScale Autopilot                           │
+│                                                                      │
+│  ┌─────────┐   ┌──────────────┐   ┌──────────────────────┐          │
+│  │Detector │──▶│Analyzer      │──▶│Planner               │          │
+│  │         │   │Qwen-Max LLM  │   │Qwen-Embedding + RAG  │          │
+│  │Prometheus│   │RCA + Scoring │   │Runbook Retrieval     │          │
+│  └─────────┘   └──────────────┘   └──────────┬───────────┘          │
+│                                               │                      │
+│                                   ┌───────────▼────────────┐         │
+│                                   │     TRUST LAYER GATE    │         │
+│                                   │ Confidence = High?      │         │
+│                                   │ Retrieval Score >= 0.65?│         │
+│                                   │ Risk = Low?             │         │
+│                                   └─────┬──────────────┬────┘         │
+│                             ALL PASS    │              │  ANY FAIL    │
+│                          AUTO-EXECUTE   ▼              ▼  ESCALATE    │
+│                              ┌──────────────┐   ┌─────────────────┐  │
+│                              │Executor      │   │Escalation Agent │  │
+│                              │kubectl +     │◀──│Qwen-Turbo       │  │
+│                              │Circuit Breaker│   │Summary + Human  │  │
+│                              └──────────────┘   │Approval Flow    │  │
+│                                                  └─────────────────┘  │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │MCP Server (8 tools) — FastAPI REST + SSE                      │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 </details>
 
